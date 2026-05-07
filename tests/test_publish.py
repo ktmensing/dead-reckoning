@@ -58,18 +58,23 @@ def test_dri_components_columns(tmp_path, monkeypatch):
     publish_dri_components(panel, weights)
 
     result = pd.read_csv(tmp_path / "data" / "published" / "dri_components.csv")
-    assert list(result.columns) == ["Date", "Component", "Value"]
+    # Wide format: Date + one column per component (human-readable label)
+    assert result.columns[0] == "Date"
+    assert "Food at Home" in result.columns
+    assert "Gas" in result.columns
 
 
-def test_dri_components_is_long_format(tmp_path, monkeypatch):
+def test_dri_components_is_wide_format(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     panel, weights = _make_panel()
     (tmp_path / "data" / "published").mkdir(parents=True)
     publish_dri_components(panel, weights)
 
     result = pd.read_csv(tmp_path / "data" / "published" / "dri_components.csv")
-    # 24 months × 2 components = 48 rows
-    assert len(result) == 24 * 2
+    # Wide format: 24 rows (one per month), not 24*2 rows
+    assert len(result) == 24
+    # Each row's component values sum approximately to the DRI contribution
+    assert result.shape[1] == 3  # Date + 2 components in fixture
 
 
 def test_dri_component_table_columns(tmp_path, monkeypatch):

@@ -8,7 +8,7 @@ that point at these files.
 
 Three outputs:
   dri_vs_cpi.csv          Headline line chart: DRI vs official CPI
-  dri_components.csv      Component contributions in long format (stacked area)
+  dri_components.csv      Component contributions, wide format (stacked area)
   dri_component_table.csv Current values, MoM, YoY, weight (table chart)
 """
 
@@ -50,30 +50,22 @@ def publish_dri_vs_cpi(panel: pd.DataFrame) -> None:
 
 
 def publish_dri_components(panel: pd.DataFrame, weights: pd.Series) -> None:
-    """Write dri_components.csv — long format for Datawrapper stacked area.
+    """Write dri_components.csv — wide format for Datawrapper stacked area.
 
-    Each row: one component's contribution to the DRI for one month.
-    Contribution = rebased_component_value * normalized_weight.
-    Stacking these contributions across components reproduces the DRI line.
+    Datawrapper stacked area charts expect one column per series, not tidy
+    long format. Each component column holds its weighted contribution to the
+    DRI (rebased_value * normalized_weight), so the columns sum to the DRI line.
 
-    Columns: [Date, Component, Value]
+    Columns: [Date, <Component Label>, ...]  — one column per component.
     """
     comp_cols = [c for c in weights.index if c in panel.columns]
-    rows = []
-    for _, row in panel.iterrows():
-        date_str = pd.Timestamp(row["date"]).strftime("%Y-%m-%d")
-        for col in comp_cols:
-            val = row[col]
-            if pd.isna(val):
-                continue
-            contribution = val * weights[col]
-            rows.append({
-                "Date": date_str,
-                "Component": _label(col),
-                "Value": round(contribution, 4),
-            })
+    out = panel[["date"]].copy()
+    out["Date"] = pd.to_datetime(out["date"]).dt.strftime("%Y-%m-%d")
+    out = out.drop(columns=["date"])
 
-    out = pd.DataFrame(rows, columns=["Date", "Component", "Value"])
+    for col in comp_cols:
+        out[_label(col)] = (panel[col] * weights[col]).round(4)
+
     save_published("dri_components", out)
 
 

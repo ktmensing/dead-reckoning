@@ -20,10 +20,21 @@ and exposes the result as the "mortgage_payment" component.
 Amortization check: $400k home, 7% rate, 20% down →
   P = 320,000, r = 0.07/12 ≈ 0.005833, n = 360
   payment = 320000 * 0.005833 / (1 - 1.005833^-360) ≈ $2,129  (matches expected ~$2,128)
+
+Panel date range
+----------------
+Start: the first month where ALL non-deferred components have data. This is
+naturally determined by the most restrictive series (e.g., cc_interest starts
+later than CPI series). Using max of first-valid-dates ensures the early DRI
+isn't computed from partial component coverage.
+
+End: the last month where ALL BLS-sourced components have data (BLS monthly
+releases define the current state of the index). Quarterly/weekly components
+outside BLS (gas, cc_interest, mortgage_payment) are forward-filled up to 4
+months within this cutoff — enough to bridge one inter-quarter gap.
 """
 
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -31,6 +42,8 @@ import yaml
 
 _CONFIG_PATH = Path("config/series.yaml")
 _BASE_DATE = "2020-01-01"
+# Max months to forward-fill quarterly series (covers one quarter + one month buffer)
+_FFILL_LIMIT = 4
 
 
 def _load_config(config_path: Path = _CONFIG_PATH) -> dict:
@@ -45,7 +58,8 @@ def _to_monthly(df: pd.DataFrame, resample_method: str = "last") -> pd.Series:
         return s.resample("MS").mean()
     else:
         # "last": for monthly series already at month-start, this is a no-op.
-        # For quarterly series, forward-fill fills inter-quarter months.
+        # For quarterly series, forward-fill fills inter-quarter months within
+        # the series' own date range (does not project beyond the last data point).
         return s.resample("MS").last().ffill()
 
 
@@ -98,11 +112,9 @@ def build_dri(
 
     # --- Step 1: resample each component to monthly ---
     monthly: dict = {}
-    comp_meta: dict = {}  # component id → config entry
 
     for comp in components:
         cid = comp["id"]
-        comp_meta[cid] = comp
 
         if comp.get("deferred"):
             continue
@@ -122,15 +134,40 @@ def build_dri(
         mortgage_m = _compute_mortgage_payment(mspus_m, rate_m)
         monthly["mortgage_payment"] = mortgage_m
 
-    # --- Step 3: build panel aligned on a common monthly index ---
+    # --- Step 3: build panel aligned on union of all monthly indices ---
     panel_df = pd.DataFrame(monthly)
     panel_df.index.name = "date"
 
-    # --- Step 4: rebase each component to Jan 2020 = 100 ---
+    # --- Step 4: determine valid date range ---
+    # Start: first month where all components have data (excludes partial-coverage
+    # early history where the DRI would reflect only a subset of components).
+    first_valids = [s.first_valid_index() for s in monthly.values() if s.first_valid_index() is not None]
+    if first_valids:
+        panel_start = max(first_valids)
+        panel_df = panel_df.loc[panel_start:]
+
+    # End: last month where all BLS-sourced components have data. BLS monthly
+    # releases define the "current" state; don't show DRI for months that BLS
+    # hasn't published yet, even if EIA/FRED have more recent data.
+    bls_comp_ids = [
+        comp["id"] for comp in components
+        if not comp.get("deferred")
+        and comp["source"] == "bls"
+        and comp["id"] in panel_df.columns
+    ]
+    if bls_comp_ids:
+        bls_cutoff = panel_df[bls_comp_ids].dropna(how="any").index.max()
+        if bls_cutoff is not None:
+            panel_df = panel_df.loc[:bls_cutoff]
+
+    # Forward-fill quarterly/sparse series within the valid range.
+    # Limit of 4 months bridges one full inter-quarter gap; mortgage_payment
+    # and cc_interest are the primary beneficiaries.
+    panel_df = panel_df.ffill(limit=_FFILL_LIMIT)
+
+    # --- Step 5: rebase each component to Jan 2020 = 100 ---
     base_date = pd.Timestamp(_BASE_DATE)
-    # Use the nearest available month if base_date is missing
     if base_date not in panel_df.index:
-        # Find closest date at or after Jan 2020
         candidates = panel_df.index[panel_df.index >= base_date]
         if len(candidates) == 0:
             raise ValueError("No data at or after Jan 2020 — cannot rebase")
@@ -139,7 +176,7 @@ def build_dri(
     base_values = panel_df.loc[base_date]
     rebased = (panel_df / base_values) * 100.0
 
-    # --- Step 5: normalize weights over components present ---
+    # --- Step 6: normalize weights over components present ---
     raw_weights = {}
     for comp in components:
         cid = comp["id"]
@@ -153,16 +190,19 @@ def build_dri(
     weight_series = pd.Series(raw_weights)
     normalized_weights = weight_series / weight_series.sum()
 
-    # --- Step 6: compute DRI composite ---
+    # --- Step 7: compute DRI composite ---
     comp_cols = list(normalized_weights.index)
     dri = (rebased[comp_cols] * normalized_weights).sum(axis=1)
 
-    # --- Step 7: rebase CPI for comparison ---
+    # --- Step 8: rebase CPI for comparison ---
     cpi_raw = _to_monthly(timeseries["cpi_headline"], "last")
+    # CPI cutoff: same BLS cutoff as other series
+    if bls_comp_ids and bls_cutoff is not None:
+        cpi_raw = cpi_raw.loc[:bls_cutoff]
     cpi_base = cpi_raw.get(base_date) if base_date in cpi_raw.index else cpi_raw.iloc[0]
     cpi_rebased = (cpi_raw / cpi_base) * 100.0
 
-    # --- Step 8: assemble output ---
+    # --- Step 9: assemble output ---
     out = rebased[comp_cols].copy()
     out["dri"] = dri
     out["cpi"] = cpi_rebased

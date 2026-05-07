@@ -15,6 +15,18 @@ class ValidationError(Exception):
     pass
 
 
+# Per-series max age overrides.
+# Monthly BLS CPI releases with a ~5-6 week lag, so on any given day the latest
+# data is 35-67 days old — 90 days covers the full lag window.
+# Quarterly series (MSPUS, TERMCBCCALLNS) update every ~90 days with an
+# additional processing lag; 150 days gives a full quarter plus a month of slack.
+_MAX_AGE_DAYS: dict = {
+    "MSPUS": 150,
+    "TERMCBCCALLNS": 150,
+}
+
+_DEFAULT_MAX_AGE_DAYS = 90  # Covers monthly series with government publication lag
+
 # Per-series plausibility ranges (min, max). Add entries as needed.
 # Values are in the series' native units (CPI index, $/gal, rate %).
 _RANGE_CHECKS: dict = {
@@ -29,14 +41,14 @@ _RANGE_CHECKS: dict = {
     "PET.EMM_EPMR_PTE_NUS_DPG.W": (0.5, 10.0),  # Gas $/gal
     "TERMCBCCALLNS": (5.0, 40.0),   # CC interest rate (%)
     "MORTGAGE30US":  (1.0, 25.0),   # 30yr mortgage rate (%)
-    "MSPUS":         (50_000, 2_000_000),  # Median home price ($)
+    "MSPUS":         (15_000, 5_000_000),  # Median home price ($); series starts 1963 at ~$17.8k
 }
 
 
 def validate_series(
     df: pd.DataFrame,
     series_id: str,
-    max_age_days: int = 60,
+    max_age_days: int = None,
     range_check: bool = True,
 ) -> None:
     """Raise ValidationError if df fails any quality check.
@@ -46,9 +58,16 @@ def validate_series(
       2. Latest observation is within max_age_days of today.
       3. Not all-null values.
       4. Per-series numeric range check (if configured and range_check=True).
+
+    max_age_days defaults to _MAX_AGE_DAYS[series_id] if configured, else
+    _DEFAULT_MAX_AGE_DAYS (90). Quarterly series need a higher threshold than
+    monthly ones due to publication lag.
     """
     if df.empty:
         raise ValidationError(f"{series_id}: empty DataFrame")
+
+    if max_age_days is None:
+        max_age_days = _MAX_AGE_DAYS.get(series_id, _DEFAULT_MAX_AGE_DAYS)
 
     latest_date = pd.to_datetime(df["date"]).max()
     age_days = (pd.Timestamp.now() - latest_date).days

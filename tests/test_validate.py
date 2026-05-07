@@ -32,16 +32,16 @@ def test_raises_on_empty_df():
 
 
 def test_raises_on_stale_data():
-    # Latest observation is 5 months old, max_age_days=60 (~2 months)
+    # 5 months old exceeds the 90-day default for unknown series
     df = _make_df(stale_months=5)
     with pytest.raises(ValidationError, match="days old"):
-        validate_series(df, "TEST000", max_age_days=60)
+        validate_series(df, "TEST000")
 
 
 def test_passes_within_age_threshold():
-    # Latest observation is 1 month old, max_age_days=60 — should pass
+    # 1 month old is well within the 90-day default
     df = _make_df(stale_months=1)
-    validate_series(df, "TEST000", max_age_days=60)
+    validate_series(df, "TEST000")
 
 
 def test_raises_when_all_null():

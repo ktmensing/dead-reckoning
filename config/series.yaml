@@ -1,0 +1,94 @@
+# DRI Price Layer — series configuration
+#
+# Weights sum to 0.90; the remaining 0.10 is reserved for quarterly inputs
+# (new car payment, streaming stack, shrinkflation proxy, ticket prices).
+# The transform layer normalizes weights over components actually present,
+# so the composite always sums to 100 at the base period.
+#
+# Sources: bls, fred, eia, derived (computed from other series)
+# Deferred series are loaded from the YAML but skipped by the transform.
+
+dri_components:
+
+  - id: rent
+    weight: 0.18
+    source: zillow_zori
+    series_id: ZORDSFRR
+    deferred: true
+    notes: "Asking rent. Salience-weighted above expenditure share. Zillow ZORI.
+      Deferred until a Zillow fetcher is built (Phase 2 or later)."
+
+  - id: mortgage_payment
+    weight: 0.11
+    source: derived
+    inputs:
+      - {fetcher: fred, series_id: MSPUS}        # Median US home sale price, quarterly
+      - {fetcher: fred, series_id: MORTGAGE30US}  # 30-yr fixed rate, weekly
+    transform: monthly_payment_30yr
+    notes: "Monthly P&I on a 30-yr fixed mortgage for the median-priced home at 20% down.
+      Derived in dri.py using the standard amortization formula."
+
+  - id: food_at_home
+    weight: 0.13
+    source: bls
+    series_id: CUSR0000SAF11
+    notes: "CPI food at home, seasonally adjusted."
+
+  - id: gas
+    weight: 0.10
+    source: eia
+    series_id: PET.EMM_EPMR_PTE_NUS_DPG.W
+    resample_method: mean
+    notes: "EIA weekly retail gasoline price (dollars per gallon).
+      Resampled to monthly mean at the transform layer, not in the fetcher."
+
+  - id: auto_insurance
+    weight: 0.06
+    source: bls
+    series_id: CUSR0000SETE
+    notes: "CPI motor vehicle insurance, seasonally adjusted."
+
+  - id: cc_interest
+    weight: 0.06
+    source: fred
+    series_id: TERMCBCCALLNS
+    notes: "Commercial bank credit card interest rate, quarterly. Forward-filled to monthly."
+
+  - id: dining_out
+    weight: 0.07
+    source: bls
+    series_id: CUSR0000SEFV
+    notes: "CPI food away from home, seasonally adjusted."
+
+  - id: utilities
+    weight: 0.03
+    source: bls
+    series_id: CUSR0000SEHF
+    notes: "CPI energy services, seasonally adjusted."
+
+  - id: used_cars
+    weight: 0.04
+    source: bls
+    series_id: CUSR0000SETA02
+    notes: "CPI used cars and trucks, seasonally adjusted."
+
+  - id: eggs
+    weight: 0.03
+    source: bls
+    series_id: APU0000708111
+    notes: "Average retail price, eggs grade A large (per dozen). Salience-weighted:
+      eggs punch above their expenditure share as a weekly reference price."
+
+  - id: home_insurance
+    weight: 0.03
+    source: bls
+    series_id: CUUR0000SEHD
+    notes: "CPI tenants and household insurance. NSA only — no seasonally adjusted
+      version is published by BLS. Seasonal noise is small for an annual premium."
+
+# Comparison line for DRI vs CPI chart.
+# Not a DRI component; fetched separately and passed to the transform.
+cpi_headline:
+  source: bls
+  series_id: CUSR0000SA0
+  notes: "CPI all items, seasonally adjusted. Used as the official comparison line."

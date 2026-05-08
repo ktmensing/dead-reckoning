@@ -146,3 +146,127 @@ def test_report_fields():
     assert report.expected_lag_days == 45
     assert report.hard_fail_days == 90
     assert report.age_days == 30
+
+
+# ---------------------------------------------------------------------------
+# Formula-derived threshold values (from series.yaml after expansion)
+# ---------------------------------------------------------------------------
+
+def _weekly_cfg() -> dict:
+    return {
+        "id": "test_weekly",
+        "series_id": "TESTW",
+        "cadence": "weekly",
+        "expected_lag_days": 10,
+        "hard_fail_days": 20,
+        "carry_forward": False,
+    }
+
+
+def _monthly_formula_cfg() -> dict:
+    """Monthly BLS series (lag 14d, cadence 30d): exp 45, hard 100."""
+    return {
+        "id": "test_monthly_formula",
+        "series_id": "TESTM",
+        "cadence": "monthly",
+        "expected_lag_days": 45,
+        "hard_fail_days": 100,
+        "carry_forward": True,
+    }
+
+
+def _monthly_plus_cfg() -> dict:
+    """Monthly APU/ZORI (lag 25d, cadence 30d): exp 50, hard 110."""
+    return {
+        "id": "test_monthly_plus",
+        "series_id": "TESTMP",
+        "cadence": "monthly",
+        "expected_lag_days": 50,
+        "hard_fail_days": 110,
+        "carry_forward": True,
+    }
+
+
+def _quarterly_formula_cfg() -> dict:
+    """Quarterly FRED (lag 95d, cadence 90d): exp 210, hard 320."""
+    return {
+        "id": "test_quarterly_formula",
+        "series_id": "TESTQF",
+        "cadence": "quarterly",
+        "expected_lag_days": 210,
+        "hard_fail_days": 320,
+        "carry_forward": True,
+    }
+
+
+def test_weekly_formula_fresh():
+    df = _make_df(age_days=5)
+    report = assess_freshness(df, _weekly_cfg(), today=_TODAY)
+    assert report.status == "fresh"
+
+
+def test_weekly_formula_stale_ok():
+    df = _make_df(age_days=15)
+    report = assess_freshness(df, _weekly_cfg(), today=_TODAY)
+    assert report.status == "stale_ok"
+
+
+def test_weekly_formula_stale_fail():
+    df = _make_df(age_days=25)
+    with pytest.raises(ValidationError):
+        assess_freshness(df, _weekly_cfg(), today=_TODAY)
+
+
+def test_monthly_formula_fresh():
+    df = _make_df(age_days=30)
+    report = assess_freshness(df, _monthly_formula_cfg(), today=_TODAY)
+    assert report.status == "fresh"
+
+
+def test_monthly_formula_stale_ok_at_67_days():
+    """March data at 67 days old should be stale_ok, not stale_fail (the original bug)."""
+    df = _make_df(age_days=67)
+    report = assess_freshness(df, _monthly_formula_cfg(), today=_TODAY)
+    assert report.status == "stale_ok"
+
+
+def test_monthly_formula_stale_fail():
+    df = _make_df(age_days=105)
+    with pytest.raises(ValidationError):
+        assess_freshness(df, _monthly_formula_cfg(), today=_TODAY)
+
+
+def test_monthly_plus_formula_fresh():
+    df = _make_df(age_days=40)
+    report = assess_freshness(df, _monthly_plus_cfg(), today=_TODAY)
+    assert report.status == "fresh"
+
+
+def test_monthly_plus_formula_stale_ok():
+    df = _make_df(age_days=80)
+    report = assess_freshness(df, _monthly_plus_cfg(), today=_TODAY)
+    assert report.status == "stale_ok"
+
+
+def test_monthly_plus_formula_stale_fail():
+    df = _make_df(age_days=115)
+    with pytest.raises(ValidationError):
+        assess_freshness(df, _monthly_plus_cfg(), today=_TODAY)
+
+
+def test_quarterly_formula_fresh():
+    df = _make_df(age_days=100)
+    report = assess_freshness(df, _quarterly_formula_cfg(), today=_TODAY)
+    assert report.status == "fresh"
+
+
+def test_quarterly_formula_stale_ok():
+    df = _make_df(age_days=250)
+    report = assess_freshness(df, _quarterly_formula_cfg(), today=_TODAY)
+    assert report.status == "stale_ok"
+
+
+def test_quarterly_formula_stale_fail():
+    df = _make_df(age_days=330)
+    with pytest.raises(ValidationError):
+        assess_freshness(df, _quarterly_formula_cfg(), today=_TODAY)

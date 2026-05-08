@@ -11,7 +11,7 @@ from pathlib import Path
 # Allow running from repo root without installing the package
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.fetch import fred, bls, bea, eia
+from src.fetch import fred, bls, bea, eia, zillow
 
 
 def check(label: str, df, expected_series_id: str = None) -> None:
@@ -33,8 +33,8 @@ def run_fred_tests() -> None:
     df = fred.fetch("MSPUS")
     check("MSPUS (median home price)", df, "MSPUS")
 
-    df = fred.fetch("TERMCBCCALLNS")
-    check("TERMCBCCALLNS (CC interest rate)", df, "TERMCBCCALLNS")
+    df = fred.fetch("TERMCBCCINTNS")
+    check("TERMCBCCINTNS (CC interest rate, accounts assessed interest)", df, "TERMCBCCINTNS")
 
 
 def run_bls_tests() -> None:
@@ -70,6 +70,14 @@ def run_eia_tests() -> None:
     assert 0.5 < latest_val < 10.0, f"EIA gas price implausible: {latest_val}"
 
 
+def run_zillow_tests() -> None:
+    print("Zillow:")
+    df = zillow.fetch("zori_sfrcondomfr_sm_sa")
+    check("zori_sfrcondomfr_sm_sa (ZORI national rent)", df, "zori_sfrcondomfr_sm_sa")
+    latest_val = df.sort_values("date").iloc[-1]["value"]
+    assert 1000 < latest_val < 5000, f"ZORI value implausible: {latest_val}"
+
+
 def main() -> None:
     failed = []
     for name, fn in [
@@ -77,6 +85,7 @@ def main() -> None:
         ("BLS", run_bls_tests),
         ("BEA", run_bea_tests),
         ("EIA", run_eia_tests),
+        ("Zillow", run_zillow_tests),
     ]:
         try:
             fn()

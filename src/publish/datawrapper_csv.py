@@ -21,8 +21,9 @@ from src.store import save_published
 
 # Human-readable labels for component IDs in the component table and legend
 _COMPONENT_LABELS: dict = {
-    "food_at_home": "Food at Home",
+    "rent": "Rent",
     "mortgage_payment": "Mortgage Payment",
+    "food_at_home": "Food at Home",
     "gas": "Gas",
     "auto_insurance": "Auto Insurance",
     "cc_interest": "Credit Card Interest",
@@ -31,7 +32,7 @@ _COMPONENT_LABELS: dict = {
     "used_cars": "Used Cars",
     "eggs": "Eggs",
     "home_insurance": "Home Insurance",
-    "rent": "Rent",
+    "quarterly_reserve": "Quarterly Reserve",
 }
 
 
@@ -148,6 +149,18 @@ def publish_dri_metadata(
     for comp in components:
         cid = comp["id"]
         if comp.get("deferred"):
+            # Include deferred components as placeholder rows so the slot is visible.
+            rows.append({
+                "component_id": cid,
+                "series_id": comp.get("series_id", comp.get("zillow_dataset", comp.get("manual_csv", ""))),
+                "cadence": comp.get("cadence", ""),
+                "data_as_of": None,
+                "age_days": None,
+                "status": "deferred",
+                "carried_forward": False,
+                "in_index": False,
+                "weight": 0.0,
+            })
             continue
         report = freshness.get(cid)
         if report is None:

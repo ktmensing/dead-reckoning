@@ -18,6 +18,7 @@ import yaml
 
 from src.fetch import bls, eia
 from src.fetch import fred as fred_module
+from src.fetch import zillow as zillow_module
 from src.publish.datawrapper_csv import (
     publish_dri_components,
     publish_dri_component_table,
@@ -49,6 +50,7 @@ def main() -> None:
     fred_ids = []
     eia_ids = []
 
+    zillow_components = []
     for comp in components:
         if comp.get("deferred"):
             continue
@@ -63,6 +65,8 @@ def main() -> None:
             for inp in comp.get("inputs", []):
                 if inp["fetcher"] == "fred":
                     fred_ids.append(inp["series_id"])
+        elif src == "zillow":
+            zillow_components.append(comp)
 
     bls_ids.append(cpi_cfg["series_id"])
 
@@ -122,7 +126,19 @@ def main() -> None:
         else:
             timeseries[sid] = df
 
-    # --- 3. Fetch EIA series ---
+    # --- 3. Fetch Zillow datasets ---
+    if zillow_components:
+        print(f"Fetching {len(zillow_components)} Zillow dataset(s)...")
+        for comp in zillow_components:
+            dataset = comp["zillow_dataset"]
+            region = comp.get("region", "United States")
+            try:
+                df = zillow_module.fetch(dataset, region)
+            except Exception as exc:
+                _die(f"Zillow fetch failed for {dataset}: {exc}")
+            timeseries[comp["id"]] = df
+
+    # --- 4. Fetch EIA series ---
     print(f"Fetching {len(eia_ids)} EIA series...")
     for sid in eia_ids:
         try:
@@ -135,7 +151,7 @@ def main() -> None:
 
     print(f"Fetched {len(timeseries)} total series.")
 
-    # --- 4. Validate each series ---
+    # --- 5. Validate each series ---
     print("Validating series...")
     freshness_reports: dict = {}
 
@@ -162,7 +178,7 @@ def main() -> None:
 
     print(f"  {len(freshness_reports)} series validated.")
 
-    # --- 5. Transform ---
+    # --- 6. Transform ---
     print("Building DRI panel...")
     try:
         result = build_dri(timeseries, freshness_reports)
@@ -183,7 +199,7 @@ def main() -> None:
     latest_date = panel.sort_values("date")["date"].iloc[-1]
     print(f"  Latest DRI: {latest_dri:.4f} ({latest_date.strftime('%Y-%m')})")
 
-    # --- 6. Persist derived ---
+    # --- 7. Persist derived ---
     print("Persisting derived data...")
     try:
         path = save_derived("dri_panel", panel)
@@ -191,7 +207,7 @@ def main() -> None:
     except Exception as exc:
         _die(f"Failed to persist derived data: {exc}")
 
-    # --- 7. Publish ---
+    # --- 8. Publish ---
     print("Publishing Datawrapper CSVs...")
     try:
         publish_dri_vs_cpi(panel)

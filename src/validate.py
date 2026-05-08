@@ -12,6 +12,29 @@ Three outcomes:
 Range checks from the old validate_series are dropped: the cadence/lag model
 is the right instrument for detecting broken sources. Range checks added noise
 without catching the failure modes that matter (stale data, wrong series ID).
+
+THRESHOLD FORMULA
+-----------------
+For series recorded at start-of-period (BLS monthly, FRED quarterly), the age
+of the latest observation grows by one full cadence interval between releases.
+The right thresholds account for that growth, not just the publication lag.
+
+For a series with publication lag L and cadence interval C in days:
+
+    expected_lag_days  ≈  L + C        + small buffer (5–10 days)
+    hard_fail_days     ≈  L + 2C       + delayed-release buffer (~10%)
+
+Concrete defaults:
+
+    Weekly    (lag 2d,   cadence 7d):    exp 10,  hard 20
+    Monthly   (lag 14d,  cadence 30d):   exp 45,  hard 100
+    Monthly+  (lag 25d,  cadence 30d):   exp 50,  hard 110
+    Quarterly (lag 95d,  cadence 90d):   exp 210, hard 320
+    Annual    (lag 180d, cadence 365d):  exp 545, hard 730
+
+Series that record at end-of-period would use L + small buffer for expected_lag,
+since the latest observation's age doesn't grow by C between releases under that
+convention.
 """
 from __future__ import annotations
 

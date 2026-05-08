@@ -278,6 +278,87 @@ def test_carry_forward_monthly_fills_exactly_1(tmp_path):
     assert pd.isna(panel.loc[pd.Timestamp("2022-05-01"), "comp_a"])
 
 
+def test_cc_interest_excluded_vs_included_changes_dri(tmp_path):
+    """Removing excluded_from_index from cc_interest should change the DRI value."""
+    ts = {
+        "comp_a": _monthly_series("2019-01-01", "2022-12-01", 100.0),
+        "cc_interest": _growing_series("2019-01-01", "2022-12-01", 100.0, 5.0),
+        "cpi_headline": _monthly_series("2019-01-01", "2022-12-01", 250.0),
+    }
+
+    components_excluded = [
+        {"id": "comp_a", "weight": 0.5, "source": "test", "series_id": "A"},
+        {"id": "cc_interest", "weight": 0.06, "source": "test", "series_id": "CC",
+         "excluded_from_index": True},
+    ]
+    components_included = [
+        {"id": "comp_a", "weight": 0.5, "source": "test", "series_id": "A"},
+        {"id": "cc_interest", "weight": 0.06, "source": "test", "series_id": "CC"},
+    ]
+
+    (tmp_path / "excl").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "incl").mkdir(parents=True, exist_ok=True)
+    cfg_excl = _minimal_config(tmp_path / "excl", components_excluded)
+    cfg_incl = _minimal_config(tmp_path / "incl", components_included)
+
+    result_excl = build_dri(ts, {}, config_path=cfg_excl)
+    result_incl = build_dri(ts, {}, config_path=cfg_incl)
+
+    # DRI should differ because cc_interest is growing and now contributes
+    latest_excl = result_excl.panel["dri"].iloc[-1]
+    latest_incl = result_incl.panel["dri"].iloc[-1]
+    assert latest_excl != latest_incl
+
+
+def test_renormalization_denominator_11_active(tmp_path):
+    """Renormalized weights of 11 active components (sum 0.84) must normalize to 1.0."""
+    weights_11 = {
+        "rent": 0.18, "mortgage_payment": 0.11, "food_at_home": 0.13,
+        "gas": 0.10, "auto_insurance": 0.06, "cc_interest": 0.06,
+        "dining_out": 0.07, "utilities": 0.03, "used_cars": 0.04,
+        "eggs": 0.03, "home_insurance": 0.03,
+    }
+    assert abs(sum(weights_11.values()) - 0.84) < 1e-9
+
+    # Build a config with these 11 components and a deferred quarterly_reserve
+    components = [
+        {"id": cid, "weight": w, "source": "test", "series_id": cid.upper()}
+        for cid, w in weights_11.items()
+    ]
+    components.append({
+        "id": "quarterly_reserve", "weight": 0.10, "source": "test",
+        "series_id": "QR", "deferred": True,
+    })
+
+    ts = {cid: _monthly_series("2019-01-01", "2022-12-01", 100.0) for cid in weights_11}
+    ts["cpi_headline"] = _monthly_series("2019-01-01", "2022-12-01", 250.0)
+
+    cfg_path = _minimal_config(tmp_path, components)
+    result = build_dri(ts, {}, config_path=cfg_path)
+
+    assert abs(result.weights.sum() - 1.0) < 1e-9
+    assert "quarterly_reserve" not in result.weights.index
+
+
+def test_quarterly_reserve_deferred_excluded_from_denominator(tmp_path):
+    """quarterly_reserve with deferred=True must not appear in weights."""
+    components = [
+        {"id": "comp_a", "weight": 0.5, "source": "test", "series_id": "A"},
+        {"id": "comp_b", "weight": 0.4, "source": "test", "series_id": "B"},
+        {"id": "quarterly_reserve", "weight": 0.10, "source": "test",
+         "series_id": "QR", "deferred": True},
+    ]
+    ts = _two_component_timeseries()
+    cfg_path = _minimal_config(tmp_path, components)
+    result = build_dri(ts, {}, config_path=cfg_path)
+
+    assert "quarterly_reserve" not in result.weights.index
+    assert abs(result.weights.sum() - 1.0) < 1e-9
+    # Denominator is 0.9 (comp_a + comp_b), not 1.0
+    assert abs(result.weights["comp_a"] - (0.5 / 0.9)) < 1e-9
+    assert abs(result.weights["comp_b"] - (0.4 / 0.9)) < 1e-9
+
+
 def test_carry_forward_quarterly_fills_exactly_3(tmp_path):
     """Quarterly carry_forward should fill at most 3 months beyond last real obs."""
     dates_q = pd.date_range("2019-01-01", "2022-03-01", freq="MS")

@@ -1,9 +1,9 @@
 # DRI Price Layer — series configuration
 #
-# Weights sum to 0.90; the remaining 0.10 is reserved for quarterly inputs
-# (new car payment, streaming stack, shrinkflation proxy, ticket prices).
-# The transform layer normalizes weights over components actually present,
-# so the composite always sums to 100 at the base period.
+# Active component weights sum to 0.84 (11 components). The remaining 0.10 is
+# the quarterly_reserve placeholder (deferred). The transform normalizes weights
+# over components actually present in the index, so the composite always sums
+# to 100 at the base period.
 #
 # Field reference:
 #   cadence            weekly | monthly | quarterly | semiannual | annual
@@ -12,15 +12,31 @@
 #   carry_forward      true: hold last value across gaps; false: staleness is a real signal
 #   excluded_from_index  true: fetched, validated, tracked in metadata — but not weighted in DRI
 #   deferred           true: skip entirely (no fetch, no validate, no contribution)
+#
+# Threshold formula (for start-of-period series):
+#   expected_lag_days  ≈  L + C        + small buffer (5–10 days)
+#   hard_fail_days     ≈  L + 2C       + delayed-release buffer (~10%)
+# where L = publication lag, C = cadence interval in days.
+# See src/validate.py for full documentation.
 
 dri_components:
 
   - id: rent
     weight: 0.18
-    source: zillow_zori
-    series_id: ZORDSFRR
-    deferred: true
-    notes: "Deferred. Source decision pending — Zillow ZORI vs BLS CPI rent of primary residence."
+    source: zillow
+    zillow_dataset: zori_sfrcondomfr_sm_sa
+    region: United States
+    cadence: monthly
+    expected_lag_days: 50             # ZORI typically releases 20–25 days after month-end
+    hard_fail_days: 110
+    carry_forward: true
+    notes: |
+      Zillow Observed Rent Index — smoothed, seasonally adjusted, SFR + condo + multifamily.
+      National rolling average (RegionType=country, RegionName="United States").
+      Chosen over Apartment List (apartments only) and BLS rent of primary residence (smoothed
+      in-place rent rather than asking rent) because it covers a broader rental market and
+      matches the felt-cost framing of the DRI. Apartment List documented as an alternative;
+      fetcher not built — see apartmentlist.com/research/national-rent-data.
 
   - id: mortgage_payment
     weight: 0.11
@@ -30,8 +46,8 @@ dri_components:
       - {fetcher: fred, series_id: MORTGAGE30US}  # 30-yr fixed rate, weekly
     transform: monthly_payment_30yr
     cadence: quarterly
-    expected_lag_days: 95
-    hard_fail_days: 200
+    expected_lag_days: 210
+    hard_fail_days: 320
     carry_forward: true
     notes: "MSPUS is quarterly with ~90d lag. Mortgage rate updates weekly — the binding cadence is MSPUS."
 
@@ -41,7 +57,7 @@ dri_components:
     series_id: CUSR0000SAF11
     cadence: monthly
     expected_lag_days: 45
-    hard_fail_days: 90
+    hard_fail_days: 100
     carry_forward: true
 
   - id: gas
@@ -50,10 +66,10 @@ dri_components:
     series_id: PET.EMM_EPMR_PTE_NUS_DPG.W
     resample_method: mean
     cadence: weekly
-    expected_lag_days: 2
-    hard_fail_days: 14
+    expected_lag_days: 10
+    hard_fail_days: 20
     carry_forward: false
-    notes: "Weekly should always be fresh; staleness is a real signal."
+    notes: "EIA occasionally releases on Tuesday; 10d expected avoids false alarms on Sunday runs. Weekly should always be fresh; staleness is a real signal."
 
   - id: auto_insurance
     weight: 0.06
@@ -61,20 +77,23 @@ dri_components:
     series_id: CUSR0000SETE
     cadence: monthly
     expected_lag_days: 45
-    hard_fail_days: 90
+    hard_fail_days: 100
     carry_forward: true
 
   - id: cc_interest
     weight: 0.06
     source: fred
-    series_id: TERMCBCCALLNS
+    series_id: TERMCBCCINTNS
     cadence: quarterly
-    expected_lag_days: 95
-    hard_fail_days: 200
+    expected_lag_days: 210
+    hard_fail_days: 320
     carry_forward: true
-    excluded_from_index: true
-    notes: "Quarterly w/ ~95d lag; carries forward between releases. Tracked but not weighted
-      in DRI pending replacement decision. See methodology page."
+    notes: |
+      FRED: Commercial Bank Interest Rate on Credit Card Plans, Accounts Assessed Interest.
+      Chosen over TERMCBCCALLNS because it isolates the rate paid by households actually
+      carrying balances. The "ALL accounts" series dilutes the rate by including paid-in-full
+      accounts that incur no interest, which understates the felt cost of revolving credit.
+      Quarterly with ~95d publication lag; carry_forward holds the value between releases.
 
   - id: dining_out
     weight: 0.07
@@ -82,7 +101,7 @@ dri_components:
     series_id: CUSR0000SEFV
     cadence: monthly
     expected_lag_days: 45
-    hard_fail_days: 90
+    hard_fail_days: 100
     carry_forward: true
 
   - id: utilities
@@ -91,7 +110,7 @@ dri_components:
     series_id: CUSR0000SEHF
     cadence: monthly
     expected_lag_days: 45
-    hard_fail_days: 90
+    hard_fail_days: 100
     carry_forward: true
 
   - id: used_cars
@@ -100,7 +119,7 @@ dri_components:
     series_id: CUSR0000SETA02
     cadence: monthly
     expected_lag_days: 45
-    hard_fail_days: 90
+    hard_fail_days: 100
     carry_forward: true
 
   - id: eggs
@@ -108,10 +127,9 @@ dri_components:
     source: bls
     series_id: APU0000708111
     cadence: monthly
-    expected_lag_days: 55
-    hard_fail_days: 100
+    expected_lag_days: 50             # APU has slightly longer publication lag than CUSR
+    hard_fail_days: 110
     carry_forward: true
-    notes: "APU series has slightly longer publication lag than CUSR — extra 10d threshold."
 
   - id: home_insurance
     weight: 0.03
@@ -119,9 +137,30 @@ dri_components:
     series_id: CUUR0000SEHD
     cadence: monthly
     expected_lag_days: 45
-    hard_fail_days: 90
+    hard_fail_days: 100
     carry_forward: true
     notes: "CPI tenants and household insurance. NSA only."
+
+  - id: quarterly_reserve
+    weight: 0.10
+    source: manual
+    manual_csv: data/raw/manual/quarterly_reserve.csv
+    cadence: quarterly
+    expected_lag_days: 210
+    hard_fail_days: 320
+    carry_forward: true
+    deferred: true                    # active when manual CSV exists with real data
+    sub_components:
+      - {id: new_car_payment,  notional_weight: 0.04,  source_hint: "Cox Automotive / KBB transaction prices + auto loan rate"}
+      - {id: streaming_stack,  notional_weight: 0.02,  source_hint: "Manual: median price of a defined SVOD bundle (Netflix Std + Max + Disney+ + one music)"}
+      - {id: shrinkflation,    notional_weight: 0.02,  source_hint: "Consumer World tracker (Edgar Dworsky) — count-based proxy"}
+      - {id: ticket_prices,    notional_weight: 0.02,  source_hint: "Pollstar Top 100 average ticket price (manual quarterly)"}
+    notes: |
+      The 10% reserve specified in the original DRI methodology. Held as a single
+      composite for now; manual quarterly updates from the four sub-components above.
+      To activate: populate data/raw/manual/quarterly_reserve.csv with columns
+      [date, value] where value is the rebased (Jan 2020 = 100) composite of the
+      four sub-components weighted by their notional_weight. Then set deferred: false.
 
 # Comparison line for DRI vs CPI chart.
 # Not a DRI component; fetched separately and passed to the transform.
@@ -131,6 +170,6 @@ cpi_headline:
   series_id: CUSR0000SA0
   cadence: monthly
   expected_lag_days: 45
-  hard_fail_days: 90
+  hard_fail_days: 100
   carry_forward: true
   notes: "CPI all items, seasonally adjusted. Used as the official comparison line."

@@ -214,7 +214,8 @@ def test_dri_metadata_row_count(tmp_path, monkeypatch):
     assert len(result) == 2
 
 
-def test_dri_metadata_excludes_deferred(tmp_path, monkeypatch):
+def test_dri_metadata_deferred_appears_as_placeholder(tmp_path, monkeypatch):
+    """Deferred components appear in metadata with status='deferred' and in_index=False."""
     monkeypatch.chdir(tmp_path)
     _, weights = _make_panel()
     freshness = _make_freshness(weights)
@@ -229,8 +230,63 @@ def test_dri_metadata_excludes_deferred(tmp_path, monkeypatch):
     publish_dri_metadata(freshness, weights, cfg)
 
     result = pd.read_csv(tmp_path / "data" / "published" / "dri_metadata.csv")
-    assert "rent" not in result["component_id"].values
-    assert len(result) == 2
+    assert len(result) == 3
+    rent_row = result[result["component_id"] == "rent"]
+    assert len(rent_row) == 1
+    assert rent_row["status"].iloc[0] == "deferred"
+    assert rent_row["in_index"].iloc[0] == False
+
+
+def test_dri_metadata_includes_deferred_quarterly_reserve(tmp_path, monkeypatch):
+    """Deferred quarterly_reserve must appear in metadata with status='deferred' and in_index=False."""
+    monkeypatch.chdir(tmp_path)
+    weights = pd.Series({"food_at_home": 1.0})
+    freshness = _make_freshness(weights)
+    cfg = {
+        "dri_components": [
+            {"id": "food_at_home", "weight": 0.13, "source": "bls", "series_id": "SID_FOOD"},
+            {
+                "id": "quarterly_reserve", "weight": 0.10, "source": "manual",
+                "cadence": "quarterly", "deferred": True,
+            },
+        ]
+    }
+    (tmp_path / "data" / "published").mkdir(parents=True)
+    publish_dri_metadata(freshness, weights, cfg)
+
+    result = pd.read_csv(tmp_path / "data" / "published" / "dri_metadata.csv")
+    qr_row = result[result["component_id"] == "quarterly_reserve"]
+    assert len(qr_row) == 1
+    assert qr_row["status"].iloc[0] == "deferred"
+    assert qr_row["in_index"].iloc[0] == False
+    assert qr_row["weight"].iloc[0] == 0.0
+
+
+def test_dri_component_table_11_rows_with_rent_and_cc(tmp_path, monkeypatch):
+    """Component table should have 11 rows including rent and cc_interest."""
+    monkeypatch.chdir(tmp_path)
+    dates = pd.date_range("2020-01-01", periods=24, freq="MS")
+    n = len(dates)
+
+    component_ids = [
+        "rent", "mortgage_payment", "food_at_home", "gas", "auto_insurance",
+        "cc_interest", "dining_out", "utilities", "used_cars", "eggs", "home_insurance",
+    ]
+    panel_data = {"date": dates, "dri": [100.0 + i * 0.5 for i in range(n)], "cpi": [100.0] * n}
+    for cid in component_ids:
+        panel_data[cid] = [100.0 + i * 0.3 for i in range(n)]
+    panel = pd.DataFrame(panel_data)
+
+    # Equal weights for simplicity
+    weights = pd.Series({cid: 1.0 / len(component_ids) for cid in component_ids})
+
+    (tmp_path / "data" / "published").mkdir(parents=True)
+    publish_dri_component_table(panel, weights)
+
+    result = pd.read_csv(tmp_path / "data" / "published" / "dri_component_table.csv")
+    assert len(result) == 11
+    assert "Rent" in result["Component"].values
+    assert "Credit Card Interest" in result["Component"].values
 
 
 def test_dri_metadata_excluded_from_index_in_index_false(tmp_path, monkeypatch):

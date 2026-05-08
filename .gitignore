@@ -4,3 +4,8 @@ data/raw/
 __pycache__/
 *.pyc
 .DS_Store
+CLAUDE.md
+REFACTOR_PROMPT.md
+Dead-reckoning-pipeline-roadmap.md
+BUILD-PROMPT.md
+COMPONENTS-EXPANSION-PROMPT.md

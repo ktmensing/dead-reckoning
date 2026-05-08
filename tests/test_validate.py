@@ -1,74 +1,148 @@
-"""Tests for src/validate.py — all failure modes with fixture DataFrames."""
+"""Tests for src/validate.py — assess_freshness with fixed today for determinism."""
 
 import pandas as pd
 import pytest
 
-from src.validate import ValidationError, validate_series
+from src.validate import FreshnessReport, ValidationError, assess_freshness
 
 
-def _make_df(n_months: int = 36, all_null: bool = False, stale_months: int = 0) -> pd.DataFrame:
-    """Return a minimal DataFrame in canonical schema."""
-    end = pd.Timestamp.now().normalize() - pd.DateOffset(months=stale_months)
-    dates = pd.date_range(end=end, periods=n_months, freq="MS")
-    values = [None if all_null else float(i + 100) for i in range(n_months)]
+_TODAY = pd.Timestamp("2026-05-01")
+
+
+def _make_df(age_days: int, all_null: bool = False) -> pd.DataFrame:
+    """Return a DataFrame whose latest date is exactly `age_days` before _TODAY."""
+    latest = _TODAY - pd.Timedelta(days=age_days)
+    # Use 30-day steps so the last row is exactly `latest` (no month-start snapping).
+    dates = [latest - pd.Timedelta(days=30 * i) for i in range(11, -1, -1)]
+    values = [None if all_null else float(i + 100) for i in range(12)]
     return pd.DataFrame({
         "date": dates,
         "value": values,
-        "series_id": "TEST000",
+        "series_id": "TEST",
         "source": "test",
         "fetched_at": pd.Timestamp.utcnow(),
     })
 
 
-def test_passes_for_valid_series():
-    df = _make_df()
-    validate_series(df, "TEST000")  # Must not raise
+def _monthly_cfg(carry: bool = True) -> dict:
+    return {
+        "id": "test_series",
+        "series_id": "TEST",
+        "cadence": "monthly",
+        "expected_lag_days": 45,
+        "hard_fail_days": 90,
+        "carry_forward": carry,
+    }
 
+
+def _quarterly_cfg(carry: bool = True) -> dict:
+    return {
+        "id": "test_quarterly",
+        "series_id": "TESTQ",
+        "cadence": "quarterly",
+        "expected_lag_days": 95,
+        "hard_fail_days": 200,
+        "carry_forward": carry,
+    }
+
+
+# ---------------------------------------------------------------------------
+# fresh
+# ---------------------------------------------------------------------------
+
+def test_fresh_status():
+    df = _make_df(age_days=10)
+    report = assess_freshness(df, _monthly_cfg(), today=_TODAY)
+    assert report.status == "fresh"
+    assert report.age_days == 10
+    assert not report.carried_forward
+
+
+def test_fresh_at_boundary():
+    df = _make_df(age_days=45)
+    report = assess_freshness(df, _monthly_cfg(), today=_TODAY)
+    assert report.status == "fresh"
+
+
+# ---------------------------------------------------------------------------
+# stale_ok
+# ---------------------------------------------------------------------------
+
+def test_stale_ok_with_carry_forward():
+    df = _make_df(age_days=60)
+    report = assess_freshness(df, _monthly_cfg(carry=True), today=_TODAY)
+    assert report.status == "stale_ok"
+    assert report.carried_forward is True
+
+
+def test_stale_ok_without_carry_forward():
+    df = _make_df(age_days=60)
+    report = assess_freshness(df, _monthly_cfg(carry=False), today=_TODAY)
+    assert report.status == "stale_ok"
+    assert report.carried_forward is False
+
+
+def test_stale_ok_at_boundary():
+    df = _make_df(age_days=89)
+    report = assess_freshness(df, _monthly_cfg(), today=_TODAY)
+    assert report.status == "stale_ok"
+
+
+# ---------------------------------------------------------------------------
+# stale_fail
+# ---------------------------------------------------------------------------
+
+def test_stale_fail_raises():
+    df = _make_df(age_days=100)
+    with pytest.raises(ValidationError, match="hard_fail_days"):
+        assess_freshness(df, _monthly_cfg(), today=_TODAY)
+
+
+def test_stale_fail_message_contains_series_id():
+    df = _make_df(age_days=100)
+    with pytest.raises(ValidationError, match="test_series"):
+        assess_freshness(df, _monthly_cfg(), today=_TODAY)
+
+
+def test_quarterly_stale_ok():
+    df = _make_df(age_days=120)
+    report = assess_freshness(df, _quarterly_cfg(), today=_TODAY)
+    assert report.status == "stale_ok"
+
+
+def test_quarterly_stale_fail():
+    df = _make_df(age_days=210)
+    with pytest.raises(ValidationError):
+        assess_freshness(df, _quarterly_cfg(), today=_TODAY)
+
+
+# ---------------------------------------------------------------------------
+# empty / null
+# ---------------------------------------------------------------------------
 
 def test_raises_on_empty_df():
-    df = pd.DataFrame(columns=["date", "value", "series_id", "source", "fetched_at"])
+    df = pd.DataFrame(columns=["date", "value"])
     with pytest.raises(ValidationError, match="empty"):
-        validate_series(df, "TEST000")
+        assess_freshness(df, _monthly_cfg(), today=_TODAY)
 
 
-def test_raises_on_stale_data():
-    # 5 months old exceeds the 90-day default for unknown series
-    df = _make_df(stale_months=5)
-    with pytest.raises(ValidationError, match="days old"):
-        validate_series(df, "TEST000")
-
-
-def test_passes_within_age_threshold():
-    # 1 month old is well within the 90-day default
-    df = _make_df(stale_months=1)
-    validate_series(df, "TEST000")
-
-
-def test_raises_when_all_null():
-    df = _make_df(all_null=True)
-    df["date"] = pd.date_range(end=pd.Timestamp.now(), periods=len(df), freq="MS")
+def test_raises_on_all_null():
+    df = _make_df(age_days=10, all_null=True)
     with pytest.raises(ValidationError, match="null"):
-        validate_series(df, "TEST000")
+        assess_freshness(df, _monthly_cfg(), today=_TODAY)
 
 
-def test_raises_on_out_of_range_value():
-    df = _make_df()
-    # gas prices (PET.EMM_EPMR_PTE_NUS_DPG.W) should be $0.50–$10/gal
-    df["value"] = 99.0  # Way above $10
-    df["date"] = pd.date_range(end=pd.Timestamp.now(), periods=len(df), freq="MS")
-    with pytest.raises(ValidationError, match="range"):
-        validate_series(df, "PET.EMM_EPMR_PTE_NUS_DPG.W")
+# ---------------------------------------------------------------------------
+# FreshnessReport fields
+# ---------------------------------------------------------------------------
 
-
-def test_range_check_disabled():
-    df = _make_df()
-    df["value"] = 99.0  # Out of range for gas, but range_check=False
-    df["date"] = pd.date_range(end=pd.Timestamp.now(), periods=len(df), freq="MS")
-    validate_series(df, "PET.EMM_EPMR_PTE_NUS_DPG.W", range_check=False)
-
-
-def test_unknown_series_skips_range_check():
-    df = _make_df()
-    df["value"] = 9999.0
-    # No range check configured for UNKNOWN — should not raise
-    validate_series(df, "UNKNOWN_SERIES")
+def test_report_fields():
+    df = _make_df(age_days=30)
+    report = assess_freshness(df, _monthly_cfg(), today=_TODAY)
+    assert isinstance(report, FreshnessReport)
+    assert report.series_id == "TEST"
+    assert report.component_id == "test_series"
+    assert report.cadence == "monthly"
+    assert report.expected_lag_days == 45
+    assert report.hard_fail_days == 90
+    assert report.age_days == 30

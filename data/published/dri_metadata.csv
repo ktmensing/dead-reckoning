@@ -1,0 +1,11 @@
+component_id,series_id,cadence,data_as_of,age_days,status,carried_forward,in_index,weight
+mortgage_payment,(derived),quarterly,2026-01-01,126,stale_ok,True,True,0.183333
+food_at_home,CUSR0000SAF11,monthly,2026-03-01,67,stale_ok,True,True,0.216667
+gas,PET.EMM_EPMR_PTE_NUS_DPG.W,weekly,2026-05-04,3,stale_ok,False,True,0.166667
+auto_insurance,CUSR0000SETE,monthly,2026-03-01,67,stale_ok,True,True,0.1
+cc_interest,TERMCBCCALLNS,quarterly,2026-02-01,95,fresh,False,False,0.0
+dining_out,CUSR0000SEFV,monthly,2026-03-01,67,stale_ok,True,True,0.116667
+utilities,CUSR0000SEHF,monthly,2026-03-01,67,stale_ok,True,True,0.05
+used_cars,CUSR0000SETA02,monthly,2026-03-01,67,stale_ok,True,True,0.066667
+eggs,APU0000708111,monthly,2026-03-01,67,stale_ok,True,True,0.05
+home_insurance,CUUR0000SEHD,monthly,2026-03-01,67,stale_ok,True,True,0.05

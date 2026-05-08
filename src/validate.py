@@ -1,92 +1,111 @@
 """
-Series validation.
+Validation layer. Per-series freshness checks driven by config metadata.
 
-Validate is the layer between fetch and transform. It converts "the API returned
-something" into "the data is suitable for building the index." Fail loud: a
-ValidationError at 8am Sunday is better than a silently wrong chart.
+Three outcomes:
+  - FRESH:      latest obs within expected_lag_days  -> proceed silently
+  - STALE_OK:   between expected_lag_days and hard_fail_days
+                -> if carry_forward: log info, proceed
+                -> else: log warning, proceed (transform will surface it)
+  - STALE_FAIL: older than hard_fail_days
+                -> raise ValidationError; pipeline aborts
+
+Range checks from the old validate_series are dropped: the cadence/lag model
+is the right instrument for detecting broken sources. Range checks added noise
+without catching the failure modes that matter (stale data, wrong series ID).
 """
+from __future__ import annotations
 
-from typing import Optional
+import logging
+from dataclasses import dataclass
+from typing import Literal
 
 import pandas as pd
 
+log = logging.getLogger(__name__)
+
 
 class ValidationError(Exception):
-    pass
+    """Raised when a series fails its hard freshness threshold."""
 
 
-# Per-series max age overrides.
-# Monthly BLS CPI releases with a ~5-6 week lag, so on any given day the latest
-# data is 35-67 days old — 90 days covers the full lag window.
-# Quarterly series (MSPUS, TERMCBCCALLNS) update every ~90 days with an
-# additional processing lag; 150 days gives a full quarter plus a month of slack.
-_MAX_AGE_DAYS: dict = {
-    "MSPUS": 150,
-    "TERMCBCCALLNS": 150,
-}
-
-_DEFAULT_MAX_AGE_DAYS = 90  # Covers monthly series with government publication lag
-
-# Per-series plausibility ranges (min, max). Add entries as needed.
-# Values are in the series' native units (CPI index, $/gal, rate %).
-_RANGE_CHECKS: dict = {
-    "CUSR0000SAF11": (100, 500),    # CPI food at home
-    "CUSR0000SA0":   (100, 500),    # CPI all items
-    "CUSR0000SETE":  (100, 1000),   # CPI auto insurance
-    "CUSR0000SEFV":  (100, 500),    # CPI dining out
-    "CUSR0000SEHF":  (50, 500),     # CPI energy services
-    "CUSR0000SETA02": (50, 500),    # CPI used cars
-    "APU0000708111": (0.5, 20.0),   # Egg price per dozen ($)
-    "CUUR0000SEHD":  (100, 1000),   # CPI renters insurance
-    "PET.EMM_EPMR_PTE_NUS_DPG.W": (0.5, 10.0),  # Gas $/gal
-    "TERMCBCCALLNS": (5.0, 40.0),   # CC interest rate (%)
-    "MORTGAGE30US":  (1.0, 25.0),   # 30yr mortgage rate (%)
-    "MSPUS":         (15_000, 5_000_000),  # Median home price ($); series starts 1963 at ~$17.8k
-}
+FreshnessStatus = Literal["fresh", "stale_ok", "stale_fail"]
 
 
-def validate_series(
+@dataclass
+class FreshnessReport:
+    series_id: str
+    component_id: str
+    cadence: str
+    latest_observation: pd.Timestamp
+    age_days: int
+    status: FreshnessStatus
+    carried_forward: bool
+    expected_lag_days: int
+    hard_fail_days: int
+
+
+def assess_freshness(
     df: pd.DataFrame,
-    series_id: str,
-    max_age_days: int = None,
-    range_check: bool = True,
-) -> None:
-    """Raise ValidationError if df fails any quality check.
+    cfg: dict,
+    today: pd.Timestamp | None = None,
+) -> FreshnessReport:
+    """Classify the freshness of a fetched series against its config thresholds.
 
-    Checks (in order):
-      1. Not empty.
-      2. Latest observation is within max_age_days of today.
-      3. Not all-null values.
-      4. Per-series numeric range check (if configured and range_check=True).
+    Does NOT mutate the DataFrame. Carry-forward is applied later in the transform.
+    Raises ValidationError on STALE_FAIL.
 
-    max_age_days defaults to _MAX_AGE_DAYS[series_id] if configured, else
-    _DEFAULT_MAX_AGE_DAYS (90). Quarterly series need a higher threshold than
-    monthly ones due to publication lag.
+    cfg must contain: id, cadence, expected_lag_days, hard_fail_days.
+    carry_forward defaults to False if absent.
     """
-    if df.empty:
-        raise ValidationError(f"{series_id}: empty DataFrame")
+    today = today or pd.Timestamp.now().normalize()
 
-    if max_age_days is None:
-        max_age_days = _MAX_AGE_DAYS.get(series_id, _DEFAULT_MAX_AGE_DAYS)
-
-    latest_date = pd.to_datetime(df["date"]).max()
-    age_days = (pd.Timestamp.now() - latest_date).days
-    if age_days > max_age_days:
+    if df.empty or df["value"].isna().all():
         raise ValidationError(
-            f"{series_id}: latest observation is {age_days} days old "
-            f"(threshold: {max_age_days} days, latest: {latest_date.date()})"
+            f"{cfg['id']}: empty or all-null after fetch. "
+            f"Check series ID and fetcher."
         )
 
-    if df["value"].isna().all():
-        raise ValidationError(f"{series_id}: all values are null")
+    latest = pd.to_datetime(df["date"]).max()
+    age = int((today - latest).days)
+    expected = int(cfg["expected_lag_days"])
+    hard = int(cfg["hard_fail_days"])
+    carry = bool(cfg.get("carry_forward", False))
 
-    if range_check and series_id in _RANGE_CHECKS:
-        lo, hi = _RANGE_CHECKS[series_id]
-        non_null = df["value"].dropna()
-        out_of_range = non_null[(non_null < lo) | (non_null > hi)]
-        if len(out_of_range) > 0:
-            sample = out_of_range.iloc[0]
-            raise ValidationError(
-                f"{series_id}: value {sample:.4f} outside expected range "
-                f"[{lo}, {hi}]"
+    if age <= expected:
+        status: FreshnessStatus = "fresh"
+    elif age <= hard:
+        status = "stale_ok"
+    else:
+        status = "stale_fail"
+
+    report = FreshnessReport(
+        series_id=cfg.get("series_id", "(derived)"),
+        component_id=cfg["id"],
+        cadence=cfg["cadence"],
+        latest_observation=latest,
+        age_days=age,
+        status=status,
+        carried_forward=(status == "stale_ok" and carry),
+        expected_lag_days=expected,
+        hard_fail_days=hard,
+    )
+
+    if status == "stale_fail":
+        raise ValidationError(
+            f"{cfg['id']}: latest obs {age}d old, exceeds hard_fail_days "
+            f"({hard}d). Source likely broken — investigate before next run."
+        )
+    if status == "stale_ok":
+        if carry:
+            log.info(
+                "%s: %dd old (expected ≤%dd) — carrying forward last value",
+                cfg["id"], age, expected,
             )
+        else:
+            log.warning(
+                "%s: %dd old (expected ≤%dd) and carry_forward=false — "
+                "value will be missing in next month's index",
+                cfg["id"], age, expected,
+            )
+
+    return report

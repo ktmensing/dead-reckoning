@@ -1,16 +1,20 @@
 """
 DRI Price Layer transform.
 
-Takes a dict of fetched DataFrames (one per component) and returns a panel
-DataFrame with the DRI composite, comparison CPI, and per-component values,
-all rebased to Jan 2020 = 100.
+Takes a dict of fetched DataFrames (one per component) and returns a DRIResult
+containing the panel, normalized weights, per-component data_as_of dates, and
+freshness reports.
 
 Weight normalization: the YAML sums to 0.90 (the remaining 0.10 is reserved
-for quarterly inputs not yet wired up). Additionally, "rent" is deferred until
-the Zillow fetcher is built. The transform normalizes weights over whatever
-components are actually present in the input dict, so the composite is always
-meaningful even when the full component set isn't complete. This is documented
-behavior, not a silent workaround.
+for quarterly inputs not yet wired up). Additionally, "rent" is deferred and
+"cc_interest" is excluded_from_index. The transform normalizes weights over
+whatever components are actually present in the index, so the composite is
+always meaningful even when the full component set isn't complete.
+
+Carry-forward: quarterly/sparse series (mortgage_payment, cc_interest) hold
+their last known value across inter-release gaps. The limit is cadence-based
+so no component is projected further than one cadence period. data_as_of
+always reflects the latest *real* observation, not the carried-forward date.
 
 Mortgage payment derivation: MSPUS (quarterly) and MORTGAGE30US (weekly) are
 passed as raw fetched series under those FRED series IDs. The transform aligns
@@ -23,27 +27,42 @@ Amortization check: $400k home, 7% rate, 20% down →
 
 Panel date range
 ----------------
-Start: the first month where ALL non-deferred components have data. This is
-naturally determined by the most restrictive series (e.g., cc_interest starts
-later than CPI series). Using max of first-valid-dates ensures the early DRI
-isn't computed from partial component coverage.
-
-End: the last month where ALL BLS-sourced components have data (BLS monthly
-releases define the current state of the index). Quarterly/weekly components
-outside BLS (gas, cc_interest, mortgage_payment) are forward-filled up to 4
-months within this cutoff — enough to bridge one inter-quarter gap.
+Start: the first month where all in-index, non-deferred components have data.
+End: the last month where BLS-sourced in-index components have data (BLS monthly
+releases control the current state of the index).
 """
+from __future__ import annotations
 
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import yaml
 
+from src.validate import FreshnessReport, ValidationError, assess_freshness
+
 _CONFIG_PATH = Path("config/series.yaml")
 _BASE_DATE = "2020-01-01"
-# Max months to forward-fill quarterly series (covers one quarter + one month buffer)
-_FFILL_LIMIT = 4
+
+# Months to forward-fill per cadence when carry_forward=true.
+# Limits projection to one cadence period so stale data doesn't silently
+# propagate across multiple release cycles.
+FFILL_LIMIT_MONTHS: dict = {
+    "weekly": 1,
+    "monthly": 1,
+    "quarterly": 3,
+    "semiannual": 6,
+    "annual": 12,
+}
+
+
+@dataclass
+class DRIResult:
+    panel: pd.DataFrame                      # date, dri, cpi, *components (rebased)
+    weights: pd.Series                       # normalized weights for in-index components
+    data_as_of: dict                         # {component_id: pd.Timestamp} — pre-ffill
+    freshness: dict                          # {component_id: FreshnessReport}
 
 
 def _load_config(config_path: Path = _CONFIG_PATH) -> dict:
@@ -58,24 +77,21 @@ def _to_monthly(df: pd.DataFrame, resample_method: str = "last") -> pd.Series:
         return s.resample("MS").mean()
     else:
         # "last": for monthly series already at month-start, this is a no-op.
-        # For quarterly series, forward-fill fills inter-quarter months within
-        # the series' own date range (does not project beyond the last data point).
-        return s.resample("MS").last().ffill()
+        # Does not project beyond the last data point — ffill is applied
+        # separately per component via carry_forward logic below.
+        return s.resample("MS").last()
 
 
 def _compute_mortgage_payment(
-    mspus: pd.Series,   # Median home price, monthly index
-    rate: pd.Series,    # 30yr fixed rate in percent, monthly index
+    mspus: pd.Series,
+    rate: pd.Series,
 ) -> pd.Series:
     """Monthly P&I for a 30-yr fixed mortgage on the median-priced home at 20% down."""
     common_idx = mspus.index.intersection(rate.index)
     price = mspus.reindex(common_idx)
-    r = rate.reindex(common_idx) / 100.0 / 12.0  # percent → decimal → monthly
+    r = rate.reindex(common_idx) / 100.0 / 12.0
 
-    principal = price * 0.80  # 20% down
-
-    # Standard amortization: PMT = P * r / (1 - (1+r)^-n)
-    # Guard against r=0 to avoid division by zero
+    principal = price * 0.80
     n = 360
     payment = np.where(
         r > 0,
@@ -87,43 +103,43 @@ def _compute_mortgage_payment(
 
 def build_dri(
     timeseries: dict,
+    freshness_reports: dict,
     config_path: Path = _CONFIG_PATH,
-) -> tuple:
+) -> DRIResult:
     """Build the DRI Price Layer.
 
     Parameters
     ----------
     timeseries : dict
-        Keys are component IDs from config (e.g. "food_at_home", "gas") plus
-        special keys "MSPUS", "MORTGAGE30US", and "cpi_headline". Values are
-        DataFrames with columns [date, value, ...].
+        Keys are component IDs (e.g. "food_at_home") plus special keys
+        "MSPUS", "MORTGAGE30US", and "cpi_headline". Values are DataFrames
+        with columns [date, value, ...].
+    freshness_reports : dict
+        {component_id: FreshnessReport} for directly-fetched components,
+        generated by run_weekly before calling this function. Derived
+        components (mortgage_payment) have their report added here.
 
     Returns
     -------
-    panel : pd.DataFrame
-        Columns: [date, dri, cpi, <component_id>, ...] where each component
-        column is the rebased value (Jan 2020 = 100). DRI and CPI are also
-        rebased to Jan 2020 = 100.
-    weights : pd.Series
-        Normalized weights for the components included in this run.
+    DRIResult with panel, weights, data_as_of, and freshness.
     """
     cfg = _load_config(config_path)
     components = cfg["dri_components"]
 
-    # --- Step 1: resample each component to monthly ---
+    # Build lookup: component_id → config entry
+    comp_cfg: dict = {c["id"]: c for c in components}
+
+    # --- Step 1: resample each directly-fetched component to monthly ---
     monthly: dict = {}
 
     for comp in components:
         cid = comp["id"]
-
         if comp.get("deferred"):
             continue
         if comp["source"] == "derived":
-            continue  # Handled separately below
-
+            continue
         if cid not in timeseries:
-            continue  # Missing series — will be excluded from composite
-
+            continue
         method = comp.get("resample_method", "last")
         monthly[cid] = _to_monthly(timeseries[cid], method)
 
@@ -134,38 +150,79 @@ def build_dri(
         mortgage_m = _compute_mortgage_payment(mspus_m, rate_m)
         monthly["mortgage_payment"] = mortgage_m
 
-    # --- Step 3: build panel aligned on union of all monthly indices ---
+    # --- Step 3: record data_as_of BEFORE carry-forward ---
+    data_as_of: dict = {}
+    for cid, s in monthly.items():
+        last_valid = s.last_valid_index()
+        if last_valid is not None:
+            data_as_of[cid] = last_valid
+
+    # --- Step 4: assess freshness for mortgage_payment (derived) ---
+    if "mortgage_payment" in monthly and "mortgage_payment" not in freshness_reports:
+        mp_df = monthly["mortgage_payment"].rename("value").reset_index()
+        mp_df.columns = ["date", "value"]
+        mp_cfg = comp_cfg.get("mortgage_payment", {})
+        if "cadence" in mp_cfg:
+            try:
+                report = assess_freshness(mp_df, mp_cfg)
+                freshness_reports = {**freshness_reports, "mortgage_payment": report}
+            except ValidationError:
+                raise
+
+    # --- Step 5: build panel aligned on union of all monthly indices ---
     panel_df = pd.DataFrame(monthly)
     panel_df.index.name = "date"
 
-    # --- Step 4: determine valid date range ---
-    # Start: first month where all components have data (excludes partial-coverage
-    # early history where the DRI would reflect only a subset of components).
-    first_valids = [s.first_valid_index() for s in monthly.values() if s.first_valid_index() is not None]
-    if first_valids:
-        panel_start = max(first_valids)
-        panel_df = panel_df.loc[panel_start:]
+    # --- Step 6: apply carry-forward per component ---
+    # Must happen AFTER pd.DataFrame(monthly) so the full union index is available;
+    # ffill on a standalone sparse Series cannot extend beyond its own last row.
+    for comp in components:
+        cid = comp["id"]
+        if cid not in panel_df.columns:
+            continue
+        cadence = comp.get("cadence")
+        carry = comp.get("carry_forward", False)
+        if carry and cadence in FFILL_LIMIT_MONTHS:
+            limit = FFILL_LIMIT_MONTHS[cadence]
+            panel_df[cid] = panel_df[cid].ffill(limit=limit)
 
-    # End: last month where all BLS-sourced components have data. BLS monthly
-    # releases define the "current" state; don't show DRI for months that BLS
-    # hasn't published yet, even if EIA/FRED have more recent data.
-    bls_comp_ids = [
-        comp["id"] for comp in components
-        if not comp.get("deferred")
-        and comp["source"] == "bls"
-        and comp["id"] in panel_df.columns
+    # --- Step 7: determine valid date range ---
+    # Start: first month where all in-index, non-derived, non-deferred components have data.
+    in_index_ids = [
+        c["id"] for c in components
+        if not c.get("deferred")
+        and not c.get("excluded_from_index")
+        and c["source"] != "derived"
+        and c["id"] in panel_df.columns
     ]
-    if bls_comp_ids:
-        bls_cutoff = panel_df[bls_comp_ids].dropna(how="any").index.max()
+    first_valids = [
+        panel_df[cid].first_valid_index()
+        for cid in in_index_ids
+        if panel_df[cid].first_valid_index() is not None
+    ]
+    # Also consider mortgage_payment start
+    if "mortgage_payment" in panel_df.columns:
+        mp_start = panel_df["mortgage_payment"].first_valid_index()
+        if mp_start is not None:
+            first_valids.append(mp_start)
+    if first_valids:
+        panel_df = panel_df.loc[max(first_valids):]
+
+    # End: last month where BLS in-index components have data.
+    bls_in_index = [
+        c["id"] for c in components
+        if not c.get("deferred")
+        and not c.get("excluded_from_index")
+        and c["source"] == "bls"
+        and c["id"] in panel_df.columns
+    ]
+    bls_cutoff = None
+    if bls_in_index:
+        bls_cutoff = panel_df[bls_in_index].dropna(how="any").index.max()
         if bls_cutoff is not None:
             panel_df = panel_df.loc[:bls_cutoff]
 
-    # Forward-fill quarterly/sparse series within the valid range.
-    # Limit of 4 months bridges one full inter-quarter gap; mortgage_payment
-    # and cc_interest are the primary beneficiaries.
-    panel_df = panel_df.ffill(limit=_FFILL_LIMIT)
-
-    # --- Step 5: rebase each component to Jan 2020 = 100 ---
+    # --- Step 8: rebase each component to Jan 2020 = 100 ---
     base_date = pd.Timestamp(_BASE_DATE)
     if base_date not in panel_df.index:
         candidates = panel_df.index[panel_df.index >= base_date]
@@ -176,36 +233,46 @@ def build_dri(
     base_values = panel_df.loc[base_date]
     rebased = (panel_df / base_values) * 100.0
 
-    # --- Step 6: normalize weights over components present ---
+    # --- Step 9: normalize weights over in-index components present ---
     raw_weights = {}
     for comp in components:
         cid = comp["id"]
-        if comp.get("deferred") or cid not in rebased.columns:
+        if comp.get("deferred") or comp.get("excluded_from_index"):
+            continue
+        if cid not in rebased.columns:
             continue
         raw_weights[cid] = comp["weight"]
 
     if not raw_weights:
-        raise ValueError("No components present after filtering deferred/missing")
+        raise ValueError("No in-index components present after filtering")
 
     weight_series = pd.Series(raw_weights)
     normalized_weights = weight_series / weight_series.sum()
 
-    # --- Step 7: compute DRI composite ---
+    # --- Step 10: compute DRI composite (in-index components only) ---
     comp_cols = list(normalized_weights.index)
     dri = (rebased[comp_cols] * normalized_weights).sum(axis=1)
 
-    # --- Step 8: rebase CPI for comparison ---
+    # --- Step 11: rebase CPI for comparison ---
     cpi_raw = _to_monthly(timeseries["cpi_headline"], "last")
-    # CPI cutoff: same BLS cutoff as other series
-    if bls_comp_ids and bls_cutoff is not None:
+    cpi_cfg = cfg.get("cpi_headline", {})
+    if cpi_cfg.get("carry_forward") and cpi_cfg.get("cadence") in FFILL_LIMIT_MONTHS:
+        cpi_raw = cpi_raw.ffill(limit=FFILL_LIMIT_MONTHS[cpi_cfg["cadence"]])
+    if bls_cutoff is not None:
         cpi_raw = cpi_raw.loc[:bls_cutoff]
     cpi_base = cpi_raw.get(base_date) if base_date in cpi_raw.index else cpi_raw.iloc[0]
     cpi_rebased = (cpi_raw / cpi_base) * 100.0
 
-    # --- Step 9: assemble output ---
-    out = rebased[comp_cols].copy()
+    # --- Step 12: assemble output panel (all components, including excluded) ---
+    all_comp_cols = [c for c in panel_df.columns if c in rebased.columns]
+    out = rebased[all_comp_cols].copy()
     out["dri"] = dri
     out["cpi"] = cpi_rebased
     out = out.dropna(subset=["dri"]).reset_index()
 
-    return out, normalized_weights
+    return DRIResult(
+        panel=out,
+        weights=normalized_weights,
+        data_as_of=data_as_of,
+        freshness=freshness_reports,
+    )

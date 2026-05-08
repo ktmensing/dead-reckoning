@@ -51,29 +51,49 @@ Point a Datawrapper chart at that URL and set the refresh interval. The chart up
 
 1. **Fetch**: If the source is new, add a fetcher in `src/fetch/` following the request/parse split in `fred.py`. If the source is BLS, FRED, or EIA, no new code is needed.
 
-2. **Config**: Add an entry to `config/series.yaml` with `id`, `weight`, `source`, `series_id`. Set `deferred: true` to include in the YAML but exclude from the composite until the fetcher is ready.
+2. **Config**: Add an entry to `config/series.yaml` with all required fields (see Schema below). Set `deferred: true` to include in the YAML but skip entirely until ready.
 
-3. **Validate**: Add a range check to `_RANGE_CHECKS` in `src/validate.py` if you know the plausible range.
+3. **Wire up**: In `scripts/run_weekly.py`, ensure the source section fetches the new series. The transform picks it up by component ID automatically.
 
-4. **Wire up**: In `scripts/run_weekly.py`, ensure the new source's series is fetched in the appropriate section (BLS batch, FRED loop, EIA, etc.). The transform picks it up automatically by component ID.
-
-5. **Test**: Run `make smoke` to confirm the fetcher returns real data, then `make all` to confirm the pipeline produces plausible CSVs.
+4. **Test**: `make smoke` to confirm live data, then `make all` to confirm the full pipeline.
 
 ---
 
 ## Schema
 
-**Fetcher output** (canonical for all sources):
+### `config/series.yaml` component fields
+
+| Field | Required | Notes |
+|---|---|---|
+| `id` | ✓ | Component identifier used as column name in the panel |
+| `weight` | ✓ | Raw weight (sum to 0.90; normalized over present components) |
+| `source` | ✓ | `bls`, `fred`, `eia`, `derived`, or `zillow_zori` |
+| `series_id` | most | Source series identifier; omit for `derived` |
+| `cadence` | ✓ | `weekly`, `monthly`, `quarterly`, `semiannual`, `annual` |
+| `expected_lag_days` | ✓ | Age beyond which the series is considered stale (logs warning/info) |
+| `hard_fail_days` | ✓ | Age beyond which the pipeline aborts |
+| `carry_forward` | | `true`: hold last value across inter-release gaps. `false` (default): staleness is a real signal |
+| `excluded_from_index` | | `true`: fetched, validated, tracked — but not weighted in DRI. Used for `cc_interest`. |
+| `deferred` | | `true`: skip entirely — no fetch, no validate, no contribution |
+
+**Freshness model:** Three outcomes per series:
+- `fresh`: age ≤ `expected_lag_days` — proceed silently
+- `stale_ok`: age between `expected_lag_days` and `hard_fail_days` — log info (if `carry_forward`) or warning; carry last value forward if configured
+- `stale_fail`: age > `hard_fail_days` — raise `ValidationError`; pipeline aborts
+
+**Carry-forward limit:** One cadence period (e.g. monthly → 1 month, quarterly → 3 months). `data_as_of` always reflects the last real observation, not the carried-forward date.
+
+### Fetcher output (canonical for all sources)
 
 | Column | Type | Notes |
 |---|---|---|
 | `date` | `pd.Timestamp` | Start of reporting period (first of month for monthly series) |
 | `value` | `float` | Native units — not rebased |
-| `series_id` | `str` | Source series identifier (FRED ID, BLS ID, etc.) |
+| `series_id` | `str` | Source series identifier |
 | `source` | `str` | `fred`, `bls`, `eia`, or `bea` |
 | `fetched_at` | `pd.Timestamp` | UTC timestamp of fetch |
 
-**DRI panel** (`data/derived/dri_panel.csv`):
+### DRI panel (`data/derived/dri_panel.csv`)
 
 | Column | Notes |
 |---|---|
@@ -82,23 +102,28 @@ Point a Datawrapper chart at that URL and set the refresh interval. The chart up
 | `cpi` | Official CPI all items, Jan 2020 = 100 |
 | `<component_id>` | One column per non-deferred component, Jan 2020 = 100 |
 
-**Published CSVs** (`data/published/`):
+**Date range:** Starts at the first month where all in-index components have data. Ends at the last month where all BLS in-index components have data (BLS monthly releases control the current end of the index).
 
-| File | Shape | Datawrapper chart type |
+### Published CSVs (`data/published/`)
+
+| File | Columns | Datawrapper chart type |
 |---|---|---|
-| `dri_vs_cpi.csv` | Wide: `[Date, Dead Reckoning Index, Official CPI]` | Line chart |
-| `dri_components.csv` | Long: `[Date, Component, Value]` | Stacked area |
-| `dri_component_table.csv` | Wide: `[Component, Latest, MoM %, YoY %, Weight]` | Table |
+| `dri_vs_cpi.csv` | `Date, Dead Reckoning Index, Official CPI` | Line chart |
+| `dri_components.csv` | `Date, <Component Label>, …` (wide) | Stacked area |
+| `dri_component_table.csv` | `Component, Data as of, Latest, MoM %, YoY %, Weight` | Table |
+| `dri_metadata.csv` | `component_id, series_id, cadence, data_as_of, age_days, status, carried_forward, in_index, weight` | Reference / annotation |
 
-Column headers in published CSVs are stable identifiers — changing them breaks live Datawrapper templates.
+Column headers in `dri_vs_cpi.csv`, `dri_components.csv`, and `dri_component_table.csv` are stable identifiers — changing them breaks live Datawrapper templates. `dri_metadata.csv` is for internal use and future chart annotations.
 
 ---
 
 ## Failure modes
 
-**Series returns empty or stale data**: `ValidationError` raised before transform runs. Check the BLS/FRED/EIA news release to confirm whether the series is still published. If retired, stop and find the replacement ID — don't guess.
+**Series exceeds `hard_fail_days`**: `ValidationError` raised; pipeline aborts. Check whether the BLS/FRED/EIA source is still published. If retired, find the replacement ID before re-running.
 
-**API key rejected**: `FetchError` with a clear message. Confirm the key in `.env` matches the one from the registration portal.
+**Series between `expected_lag_days` and `hard_fail_days`**: Warning logged; pipeline continues. If `carry_forward: true`, the last known value is held forward (up to one cadence period). If `carry_forward: false`, the component will be NaN for that month.
+
+**API key rejected**: `FetchError` with a clear message. Confirm the key in `.env`.
 
 **BLS batch rate limit** (250 requests/day on v2): The batch call counts as one request regardless of series count, so this is unlikely. If hit, run `make all` the next day or split into two days.
 

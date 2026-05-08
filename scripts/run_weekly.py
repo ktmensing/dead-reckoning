@@ -14,18 +14,19 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import yaml
+
 from src.fetch import bls, eia
 from src.fetch import fred as fred_module
 from src.publish.datawrapper_csv import (
     publish_dri_components,
     publish_dri_component_table,
+    publish_dri_metadata,
     publish_dri_vs_cpi,
 )
 from src.store import save_derived
 from src.transform.dri import build_dri
-from src.validate import ValidationError, validate_series
-
-import yaml
+from src.validate import ValidationError, assess_freshness
 
 
 def _load_config() -> dict:
@@ -59,15 +60,12 @@ def main() -> None:
         elif src == "eia":
             eia_ids.append(comp["series_id"])
         elif src == "derived":
-            # Pull the constituent FRED series
             for inp in comp.get("inputs", []):
                 if inp["fetcher"] == "fred":
                     fred_ids.append(inp["series_id"])
 
-    # Always fetch headline CPI
     bls_ids.append(cpi_cfg["series_id"])
 
-    # Deduplicate while preserving order
     bls_ids = list(dict.fromkeys(bls_ids))
     fred_ids = list(dict.fromkeys(fred_ids))
 
@@ -80,7 +78,6 @@ def main() -> None:
     except Exception as exc:
         _die(f"BLS batch fetch failed: {exc}")
 
-    # Map BLS results back to component IDs
     series_id_to_comp: dict = {}
     for comp in components:
         if comp.get("deferred") or comp["source"] != "bls":
@@ -89,20 +86,41 @@ def main() -> None:
 
     for sid, df in bls_results.items():
         comp_id = series_id_to_comp.get(sid, sid)
-        # cpi_headline is special
         if sid == cpi_cfg["series_id"]:
             timeseries["cpi_headline"] = df
         else:
             timeseries[comp_id] = df
 
     # --- 2. Fetch FRED series ---
+    # Derived inputs (MSPUS, MORTGAGE30US) stay keyed by series_id so the transform
+    # can find them. Direct FRED components (cc_interest → TERMCBCCALLNS) are remapped
+    # to their component_id for uniform validation downstream.
+    derived_input_sids = {
+        inp["series_id"]
+        for comp in components
+        if comp["source"] == "derived"
+        for inp in comp.get("inputs", [])
+        if inp.get("fetcher") == "fred"
+    }
+    fred_series_id_to_comp = {
+        comp["series_id"]: comp["id"]
+        for comp in components
+        if not comp.get("deferred")
+        and comp["source"] == "fred"
+        and "series_id" in comp
+    }
     print(f"Fetching {len(fred_ids)} FRED series...")
     for sid in fred_ids:
         try:
             df = fred_module.fetch(sid)
         except Exception as exc:
             _die(f"FRED fetch failed for {sid}: {exc}")
-        timeseries[sid] = df
+        if sid in derived_input_sids:
+            timeseries[sid] = df          # e.g. MSPUS, MORTGAGE30US
+        elif sid in fred_series_id_to_comp:
+            timeseries[fred_series_id_to_comp[sid]] = df  # e.g. cc_interest
+        else:
+            timeseries[sid] = df
 
     # --- 3. Fetch EIA series ---
     print(f"Fetching {len(eia_ids)} EIA series...")
@@ -111,7 +129,6 @@ def main() -> None:
             df = eia.fetch(sid)
         except Exception as exc:
             _die(f"EIA fetch failed for {sid}: {exc}")
-        # Map EIA series to component id
         for comp in components:
             if comp.get("series_id") == sid:
                 timeseries[comp["id"]] = df
@@ -120,39 +137,51 @@ def main() -> None:
 
     # --- 4. Validate each series ---
     print("Validating series...")
-    failed_validation = []
+    freshness_reports: dict = {}
+
+    # All component series are now keyed by component_id. Only raw derived inputs
+    # (MSPUS, MORTGAGE30US) remain under their series_id — skip those here.
+    comp_by_id: dict = {c["id"]: c for c in components if not c.get("deferred")}
+
     for name, df in timeseries.items():
-        # Use the actual FRED/BLS series ID for range checks
-        # For component IDs, look up the series_id from config
-        series_id_for_check = name
-        for comp in components:
-            if comp["id"] == name and "series_id" in comp:
-                series_id_for_check = comp["series_id"]
-                break
-        if name == "cpi_headline":
-            series_id_for_check = cpi_cfg["series_id"]
+        if name in comp_by_id:
+            comp_cfg = comp_by_id[name]
+        elif name == "cpi_headline":
+            comp_cfg = cpi_cfg
+        else:
+            continue  # raw derived inputs (MSPUS, MORTGAGE30US) or unknown keys
+
+        if "cadence" not in comp_cfg:
+            continue
 
         try:
-            validate_series(df, series_id_for_check)
+            report = assess_freshness(df, comp_cfg)
+            freshness_reports[comp_cfg["id"]] = report
         except ValidationError as exc:
-            failed_validation.append(str(exc))
+            _die(f"Validation failed: {exc}")
 
-    if failed_validation:
-        for msg in failed_validation:
-            print(f"  VALIDATION FAIL: {msg}", file=sys.stderr)
-        _die(f"{len(failed_validation)} series failed validation")
-
-    print("  All series passed validation.")
+    print(f"  {len(freshness_reports)} series validated.")
 
     # --- 5. Transform ---
     print("Building DRI panel...")
     try:
-        panel, weights = build_dri(timeseries)
+        result = build_dri(timeseries, freshness_reports)
+    except ValidationError as exc:
+        _die(f"Transform validation failed: {exc}")
     except Exception as exc:
         _die(f"Transform failed: {exc}")
 
+    panel = result.panel
+    weights = result.weights
+    data_as_of = result.data_as_of
+    freshness_reports = result.freshness
+
     print(f"  Panel: {len(panel)} monthly rows, {panel.shape[1]} columns.")
     print(f"  DRI range: {panel['dri'].min():.2f} – {panel['dri'].max():.2f}")
+
+    latest_dri = panel.sort_values("date")["dri"].iloc[-1]
+    latest_date = panel.sort_values("date")["date"].iloc[-1]
+    print(f"  Latest DRI: {latest_dri:.4f} ({latest_date.strftime('%Y-%m')})")
 
     # --- 6. Persist derived ---
     print("Persisting derived data...")
@@ -169,8 +198,10 @@ def main() -> None:
         print("  data/published/dri_vs_cpi.csv")
         publish_dri_components(panel, weights)
         print("  data/published/dri_components.csv")
-        publish_dri_component_table(panel, weights)
+        publish_dri_component_table(panel, weights, data_as_of)
         print("  data/published/dri_component_table.csv")
+        publish_dri_metadata(freshness_reports, weights, cfg)
+        print("  data/published/dri_metadata.csv")
     except Exception as exc:
         _die(f"Publish step failed: {exc}")
 

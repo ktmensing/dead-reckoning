@@ -5,8 +5,13 @@
 # The transform layer normalizes weights over components actually present,
 # so the composite always sums to 100 at the base period.
 #
-# Sources: bls, fred, eia, derived (computed from other series)
-# Deferred series are loaded from the YAML but skipped by the transform.
+# Field reference:
+#   cadence            weekly | monthly | quarterly | semiannual | annual
+#   expected_lag_days  Age beyond which the series is considered stale (warning, carry-forward)
+#   hard_fail_days     Age beyond which the pipeline aborts; data is genuinely broken
+#   carry_forward      true: hold last value across gaps; false: staleness is a real signal
+#   excluded_from_index  true: fetched, validated, tracked in metadata — but not weighted in DRI
+#   deferred           true: skip entirely (no fetch, no validate, no contribution)
 
 dri_components:
 
@@ -15,8 +20,7 @@ dri_components:
     source: zillow_zori
     series_id: ZORDSFRR
     deferred: true
-    notes: "Asking rent. Salience-weighted above expenditure share. Zillow ZORI.
-      Deferred until a Zillow fetcher is built (Phase 2 or later)."
+    notes: "Deferred. Source decision pending — Zillow ZORI vs BLS CPI rent of primary residence."
 
   - id: mortgage_payment
     weight: 0.11
@@ -25,70 +29,108 @@ dri_components:
       - {fetcher: fred, series_id: MSPUS}        # Median US home sale price, quarterly
       - {fetcher: fred, series_id: MORTGAGE30US}  # 30-yr fixed rate, weekly
     transform: monthly_payment_30yr
-    notes: "Monthly P&I on a 30-yr fixed mortgage for the median-priced home at 20% down.
-      Derived in dri.py using the standard amortization formula."
+    cadence: quarterly
+    expected_lag_days: 95
+    hard_fail_days: 200
+    carry_forward: true
+    notes: "MSPUS is quarterly with ~90d lag. Mortgage rate updates weekly — the binding cadence is MSPUS."
 
   - id: food_at_home
     weight: 0.13
     source: bls
     series_id: CUSR0000SAF11
-    notes: "CPI food at home, seasonally adjusted."
+    cadence: monthly
+    expected_lag_days: 45
+    hard_fail_days: 90
+    carry_forward: true
 
   - id: gas
     weight: 0.10
     source: eia
     series_id: PET.EMM_EPMR_PTE_NUS_DPG.W
     resample_method: mean
-    notes: "EIA weekly retail gasoline price (dollars per gallon).
-      Resampled to monthly mean at the transform layer, not in the fetcher."
+    cadence: weekly
+    expected_lag_days: 2
+    hard_fail_days: 14
+    carry_forward: false
+    notes: "Weekly should always be fresh; staleness is a real signal."
 
   - id: auto_insurance
     weight: 0.06
     source: bls
     series_id: CUSR0000SETE
-    notes: "CPI motor vehicle insurance, seasonally adjusted."
+    cadence: monthly
+    expected_lag_days: 45
+    hard_fail_days: 90
+    carry_forward: true
 
   - id: cc_interest
     weight: 0.06
     source: fred
     series_id: TERMCBCCALLNS
-    notes: "Commercial bank credit card interest rate, quarterly. Forward-filled to monthly."
+    cadence: quarterly
+    expected_lag_days: 95
+    hard_fail_days: 200
+    carry_forward: true
+    excluded_from_index: true
+    notes: "Quarterly w/ ~95d lag; carries forward between releases. Tracked but not weighted
+      in DRI pending replacement decision. See methodology page."
 
   - id: dining_out
     weight: 0.07
     source: bls
     series_id: CUSR0000SEFV
-    notes: "CPI food away from home, seasonally adjusted."
+    cadence: monthly
+    expected_lag_days: 45
+    hard_fail_days: 90
+    carry_forward: true
 
   - id: utilities
     weight: 0.03
     source: bls
     series_id: CUSR0000SEHF
-    notes: "CPI energy services, seasonally adjusted."
+    cadence: monthly
+    expected_lag_days: 45
+    hard_fail_days: 90
+    carry_forward: true
 
   - id: used_cars
     weight: 0.04
     source: bls
     series_id: CUSR0000SETA02
-    notes: "CPI used cars and trucks, seasonally adjusted."
+    cadence: monthly
+    expected_lag_days: 45
+    hard_fail_days: 90
+    carry_forward: true
 
   - id: eggs
     weight: 0.03
     source: bls
     series_id: APU0000708111
-    notes: "Average retail price, eggs grade A large (per dozen). Salience-weighted:
-      eggs punch above their expenditure share as a weekly reference price."
+    cadence: monthly
+    expected_lag_days: 55
+    hard_fail_days: 100
+    carry_forward: true
+    notes: "APU series has slightly longer publication lag than CUSR — extra 10d threshold."
 
   - id: home_insurance
     weight: 0.03
     source: bls
     series_id: CUUR0000SEHD
-    notes: "CPI tenants and household insurance. NSA only — no seasonally adjusted
-      version is published by BLS. Seasonal noise is small for an annual premium."
+    cadence: monthly
+    expected_lag_days: 45
+    hard_fail_days: 90
+    carry_forward: true
+    notes: "CPI tenants and household insurance. NSA only."
 
 # Comparison line for DRI vs CPI chart.
 # Not a DRI component; fetched separately and passed to the transform.
 cpi_headline:
+  id: cpi_headline
   source: bls
   series_id: CUSR0000SA0
+  cadence: monthly
+  expected_lag_days: 45
+  hard_fail_days: 90
+  carry_forward: true
   notes: "CPI all items, seasonally adjusted. Used as the official comparison line."

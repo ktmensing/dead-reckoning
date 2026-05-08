@@ -1,5 +1,5 @@
 component_id,series_id,cadence,data_as_of,age_days,status,carried_forward,in_index,weight
-rent,(derived),monthly,2026-03-31,38.0,fresh,False,True,0.214286
+rent,Metro_zori_uc_sfrcondomfr_sm_sa_month,monthly,2026-03-31,38.0,fresh,False,True,0.214286
 mortgage_payment,(derived),quarterly,2026-01-01,127.0,fresh,False,True,0.130952
 food_at_home,CUSR0000SAF11,monthly,2026-03-01,68.0,stale_ok,True,True,0.154762
 gas,PET.EMM_EPMR_PTE_NUS_DPG.W,weekly,2026-05-04,4.0,fresh,False,True,0.119048

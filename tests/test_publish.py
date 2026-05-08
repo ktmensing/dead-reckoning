@@ -289,6 +289,82 @@ def test_dri_component_table_11_rows_with_rent_and_cc(tmp_path, monkeypatch):
     assert "Credit Card Interest" in result["Component"].values
 
 
+def test_dri_component_table_mom_yoy_current_data_as_of(tmp_path, monkeypatch):
+    """data_as_of == panel latest → MoM and YoY show computed numeric values."""
+    monkeypatch.chdir(tmp_path)
+    panel, weights = _make_panel()
+    # Panel latest = 2021-12-01 (24 months from 2020-01-01)
+    data_as_of = {
+        "food_at_home": pd.Timestamp("2021-12-01"),
+        "gas": pd.Timestamp("2021-12-01"),
+    }
+    (tmp_path / "data" / "published").mkdir(parents=True)
+    publish_dri_component_table(panel, weights, data_as_of)
+
+    result = pd.read_csv(tmp_path / "data" / "published" / "dri_component_table.csv")
+    food_row = result[result["Component"] == "Food at Home"]
+    assert food_row["MoM %"].iloc[0] != "—"
+    assert food_row["YoY %"].iloc[0] != "—"
+    assert pd.notna(food_row["MoM %"].iloc[0])
+    assert pd.notna(food_row["YoY %"].iloc[0])
+
+
+def test_dri_component_table_mom_dash_when_one_month_stale(tmp_path, monkeypatch):
+    """data_as_of 1 month before panel latest → MoM=—, YoY=computed."""
+    monkeypatch.chdir(tmp_path)
+    panel, weights = _make_panel()
+    # Panel latest = 2021-12-01; data_as_of = 2021-11-01 (1 month earlier)
+    data_as_of = {
+        "food_at_home": pd.Timestamp("2021-11-01"),
+        "gas": pd.Timestamp("2021-12-01"),
+    }
+    (tmp_path / "data" / "published").mkdir(parents=True)
+    publish_dri_component_table(panel, weights, data_as_of)
+
+    result = pd.read_csv(tmp_path / "data" / "published" / "dri_component_table.csv")
+    food_row = result[result["Component"] == "Food at Home"]
+    assert food_row["MoM %"].iloc[0] == "—"
+    assert food_row["YoY %"].iloc[0] != "—"
+    assert pd.notna(food_row["YoY %"].iloc[0])
+
+
+def test_dri_component_table_both_dash_when_13_months_stale(tmp_path, monkeypatch):
+    """data_as_of 13+ months before panel latest → both MoM and YoY show —."""
+    monkeypatch.chdir(tmp_path)
+    panel, weights = _make_panel()
+    # Panel latest = 2021-12-01; data_as_of = 2020-11-01 (13 months earlier)
+    data_as_of = {
+        "food_at_home": pd.Timestamp("2020-11-01"),
+        "gas": pd.Timestamp("2021-12-01"),
+    }
+    (tmp_path / "data" / "published").mkdir(parents=True)
+    publish_dri_component_table(panel, weights, data_as_of)
+
+    result = pd.read_csv(tmp_path / "data" / "published" / "dri_component_table.csv")
+    food_row = result[result["Component"] == "Food at Home"]
+    assert food_row["MoM %"].iloc[0] == "—"
+    assert food_row["YoY %"].iloc[0] == "—"
+
+
+def test_dri_component_table_gas_fresh_shows_computed(tmp_path, monkeypatch):
+    """Gas (data_as_of == panel latest) shows computed MoM and YoY."""
+    monkeypatch.chdir(tmp_path)
+    panel, weights = _make_panel()
+    data_as_of = {
+        "food_at_home": pd.Timestamp("2021-11-01"),
+        "gas": pd.Timestamp("2021-12-01"),
+    }
+    (tmp_path / "data" / "published").mkdir(parents=True)
+    publish_dri_component_table(panel, weights, data_as_of)
+
+    result = pd.read_csv(tmp_path / "data" / "published" / "dri_component_table.csv")
+    gas_row = result[result["Component"] == "Gas"]
+    assert gas_row["MoM %"].iloc[0] != "—"
+    assert gas_row["YoY %"].iloc[0] != "—"
+    assert pd.notna(gas_row["MoM %"].iloc[0])
+    assert pd.notna(gas_row["YoY %"].iloc[0])
+
+
 def test_dri_metadata_excluded_from_index_in_index_false(tmp_path, monkeypatch):
     """excluded_from_index components should appear with in_index=False and weight=0."""
     monkeypatch.chdir(tmp_path)

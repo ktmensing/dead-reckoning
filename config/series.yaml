@@ -24,6 +24,7 @@ dri_components:
   - id: rent
     weight: 0.18
     source: zillow
+    series_id: Metro_zori_uc_sfrcondomfr_sm_sa_month
     zillow_dataset: zori_sfrcondomfr_sm_sa
     region: United States
     cadence: monthly

@@ -98,20 +98,30 @@ def publish_dri_component_table(
 
         latest = s.iloc[-1]
 
-        mom_pct = None
-        if len(s) >= 2:
-            prev_month = s.iloc[-2]
-            if prev_month != 0:
-                mom_pct = round((latest - prev_month) / prev_month * 100, 2)
-
-        yoy_pct = None
-        if len(s) >= 13:
-            year_ago = s.iloc[-13]
-            if year_ago != 0:
-                yoy_pct = round((latest - year_ago) / year_ago * 100, 2)
+        panel_latest = s.index[-1].replace(day=1)
 
         as_of = data_as_of.get(col)
+        as_of_ts = pd.Timestamp(as_of).replace(day=1) if as_of is not None else None
         as_of_str = pd.Timestamp(as_of).strftime("%Y-%m-%d") if as_of is not None else None
+
+        mom_pct: float | str | None = None
+        if len(s) >= 2:
+            if as_of_ts is not None and as_of_ts < panel_latest:
+                mom_pct = "—"
+            else:
+                prev_month = s.iloc[-2]
+                if prev_month != 0:
+                    mom_pct = round((latest - prev_month) / prev_month * 100, 2)
+
+        yoy_pct: float | str | None = None
+        if len(s) >= 13:
+            yoy_cutoff = panel_latest - pd.DateOffset(months=12)
+            if as_of_ts is not None and as_of_ts < yoy_cutoff:
+                yoy_pct = "—"
+            else:
+                year_ago = s.iloc[-13]
+                if year_ago != 0:
+                    yoy_pct = round((latest - year_ago) / year_ago * 100, 2)
 
         rows.append({
             "Component": _label(col),

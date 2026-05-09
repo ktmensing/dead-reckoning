@@ -6,11 +6,12 @@ become legend labels in Datawrapper, so renames here break chart templates.
 Do not change column names without also updating any live Datawrapper charts
 that point at these files.
 
-Four outputs:
+Five outputs:
   dri_vs_cpi.csv          Headline line chart: DRI vs official CPI
   dri_components.csv      Component contributions, wide format (stacked area)
   dri_component_table.csv Current values, MoM, YoY, weight (table chart)
   dri_metadata.csv        Freshness report: one row per component
+  mercury.csv
 """
 
 from __future__ import annotations
@@ -196,3 +197,16 @@ def publish_dri_metadata(
         "age_days", "status", "carried_forward", "in_index", "weight",
     ])
     save_published("dri_metadata", out)
+
+def publish_mercury(mercury_df: pd.DataFrame) -> None:
+    """Write mercury.csv — line chart: divergence + component z-scores.
+
+    Columns: [Date, Divergence, Sentiment Z, Conditions Z]
+    Positive divergence = sentiment warmer than conditions.
+    Negative = sentiment colder than conditions.
+    """
+    out = mercury_df[["date", "divergence", "sentiment_z", "conditions_z"]].copy()
+    out.columns = ["Date", "Divergence", "Sentiment Z", "Conditions Z"]
+    out["Date"] = pd.to_datetime(out["Date"]).dt.strftime("%Y-%m-%d")
+    out = out.dropna(subset=["Divergence"])
+    save_published("mercury", out)

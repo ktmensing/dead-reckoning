@@ -19,11 +19,13 @@ import yaml
 from src.fetch import bls, eia
 from src.fetch import fred as fred_module
 from src.fetch import zillow as zillow_module
+from src.fetch.mercury import build_mercury
 from src.publish.datawrapper_csv import (
     publish_dri_components,
     publish_dri_component_table,
     publish_dri_metadata,
     publish_dri_vs_cpi,
+    publish_mercury,
 )
 from src.store import save_derived
 from src.transform.dri import build_dri
@@ -44,6 +46,7 @@ def main() -> None:
     cfg = _load_config()
     components = cfg["dri_components"]
     cpi_cfg = cfg["cpi_headline"]
+    mercury_comps = cfg.get("mercury_components", [])
 
     # --- Collect series IDs by source ---
     bls_ids = []
@@ -69,6 +72,9 @@ def main() -> None:
             zillow_components.append(comp)
 
     bls_ids.append(cpi_cfg["series_id"])
+
+    mercury_fred_ids = {comp["series_id"]: comp["id"] for comp in mercury_comps if comp["source"] == "fred"}
+    fred_ids.extend(mercury_fred_ids.keys())
 
     bls_ids = list(dict.fromkeys(bls_ids))
     fred_ids = list(dict.fromkeys(fred_ids))
@@ -123,6 +129,8 @@ def main() -> None:
             timeseries[sid] = df          # e.g. MSPUS, MORTGAGE30US
         elif sid in fred_series_id_to_comp:
             timeseries[fred_series_id_to_comp[sid]] = df  # e.g. cc_interest
+        elif sid in mercury_fred_ids:
+            timeseries[mercury_fred_ids[sid]] = df        # e.g. umich_expectations, conference_board_confidence
         else:
             timeseries[sid] = df
 
@@ -207,6 +215,17 @@ def main() -> None:
     except Exception as exc:
         _die(f"Failed to persist derived data: {exc}")
 
+    # --- 7b. Build and persist Mercury indicator ---
+    print("Building Mercury indicator...")
+    try:
+        dri_series = panel.set_index("date")["dri"]
+        umich_series = timeseries["umich_expectations"].set_index("date")["value"]
+        mercury_df = build_mercury(dri_series, umich_series)
+        path = save_derived("mercury", mercury_df)
+        print(f"  Wrote {path} ({len(mercury_df)} rows)")
+    except Exception as exc:
+        _die(f"Mercury build failed: {exc}")
+
     # --- 8. Publish ---
     print("Publishing Datawrapper CSVs...")
     try:
@@ -218,6 +237,8 @@ def main() -> None:
         print("  data/published/dri_component_table.csv")
         publish_dri_metadata(freshness_reports, weights, cfg)
         print("  data/published/dri_metadata.csv")
+        publish_mercury(mercury_df)
+        print("  data/published/mercury.csv")
     except Exception as exc:
         _die(f"Publish step failed: {exc}")
 

@@ -174,3 +174,15 @@ cpi_headline:
   hard_fail_days: 100
   carry_forward: true
   notes: "CPI all items, seasonally adjusted. Used as the official comparison line."
+
+mercury_components:
+  - id: umich_expectations
+    source: fred
+    series_id: MICH
+    notes: "U-Mich Index of Consumer Expectations. Monthly."
+
+  # DRI from Phase 1 already in store — no new fetch needed.
+
+  # Google Trends basket — pulled via pytrends, not series.yaml:
+  # terms: ["recession", "layoffs", "stagflation", "vibecession"]
+  # window: trailing 5-year rolling, normalized 0–100

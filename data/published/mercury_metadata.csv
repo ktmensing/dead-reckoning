@@ -1,0 +1,5 @@
+source_id,series_id,cadence,data_as_of,age_days,status,carried_forward,weight
+umich_expectations,MICH,monthly,2026-03-01,74,fresh,False,0.2
+umich,UMCSENT,monthly,2026-03-01,74,fresh,False,0.35
+oecd_confidence,USACSCICP02STSAM,monthly,2026-03-01,74,fresh,False,0.1
+conference_board,conference_board,monthly,2026-04-01,43,fresh,False,0.35

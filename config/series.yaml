@@ -150,7 +150,6 @@ dri_components:
     expected_lag_days: 210
     hard_fail_days: 320
     carry_forward: true
-    deferred: true                    # active when manual CSV exists with real data
     sub_components:
       - {id: new_car_payment,  notional_weight: 0.04,  source_hint: "Cox Automotive / KBB transaction prices + auto loan rate"}
       - {id: streaming_stack,  notional_weight: 0.02,  source_hint: "Manual: median price of a defined SVOD bundle (Netflix Std + Max + Disney+ + one music)"}
@@ -179,7 +178,43 @@ mercury_components:
   - id: umich_expectations
     source: fred
     series_id: MICH
-    notes: "U-Mich Index of Consumer Expectations. Monthly."
+    cadence: monthly
+    expected_lag_days: 75   # Observation date = survey month; FRED publishes ~30d later and may revise ~45d later
+    hard_fail_days: 120
+    carry_forward: false
+    weight: 0.2
+    notes: "U-Mich Inflation Expectation (1 year). Monthly."
+
+  - id: umich
+    source: fred
+    series_id: UMCSENT
+    cadence: monthly
+    expected_lag_days: 75   # Same publication cadence as MICH
+    hard_fail_days: 120
+    carry_forward: false
+    weight: 0.35
+    notes: "U-Mich Consumer Sentiment. Monthly."
+
+  - id: oecd_confidence
+    source: oecd
+    series_id: USACSCICP02STSAM
+    cadence: monthly
+    expected_lag_days: 75
+    hard_fail_days: 120
+    carry_forward: false
+    weight: 0.1
+    notes: "OECD Consumer Opinion Surveys: Composite Consumer Confidence for United States"
+
+  - id: conference_board
+    weight: 0.35
+    series_id: conference_board
+    source: manual
+    manual_csv: data/raw/manual/ccb.csv
+    cadence: monthly
+    expected_lag_days: 75
+    hard_fail_days: 120
+    carry_forward: true
+    notes: "Conference Board Consumer Confidence. Monthly."
 
   # DRI from Phase 1 already in store — no new fetch needed.
 

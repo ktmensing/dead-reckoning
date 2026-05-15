@@ -210,3 +210,39 @@ def publish_mercury(mercury_df: pd.DataFrame) -> None:
     out["Date"] = pd.to_datetime(out["Date"]).dt.strftime("%Y-%m-%d")
     out = out.dropna(subset=["Divergence"])
     save_published("mercury", out)
+
+
+def publish_mercury_metadata(
+    freshness: dict,
+    mercury_comps: list,
+) -> None:
+    """Write mercury_metadata.csv — one row per Mercury sentiment input.
+
+    Columns: source_id, series_id, cadence, data_as_of, age_days, status,
+             carried_forward, weight
+
+    Parallel to dri_metadata.csv. Used for freshness annotation and
+    downstream charts that want to surface data currency.
+    """
+    rows = []
+    for comp in mercury_comps:
+        cid = comp["id"]
+        report = freshness.get(cid)
+        if report is None:
+            continue
+        rows.append({
+            "source_id": cid,
+            "series_id": report.series_id,
+            "cadence": report.cadence,
+            "data_as_of": report.latest_observation.strftime("%Y-%m-%d"),
+            "age_days": report.age_days,
+            "status": report.status,
+            "carried_forward": report.carried_forward,
+            "weight": float(comp.get("weight", 0.0)),
+        })
+
+    out = pd.DataFrame(rows, columns=[
+        "source_id", "series_id", "cadence", "data_as_of",
+        "age_days", "status", "carried_forward", "weight",
+    ])
+    save_published("mercury_metadata", out)

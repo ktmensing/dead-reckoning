@@ -33,6 +33,7 @@ releases control the current state of the index).
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -41,6 +42,14 @@ import pandas as pd
 import yaml
 
 from src.validate import FreshnessReport, ValidationError, assess_freshness
+
+log = logging.getLogger(__name__)
+
+# Components whose normalized weight exceeds this threshold are considered
+# "material". DRI is suppressed (set to NaN) for any row where a material
+# component has no data after carry-forward, rather than silently treating
+# it as zero and publishing a structurally wrong composite.
+MATERIAL_WEIGHT_THRESHOLD = 0.05
 
 _CONFIG_PATH = Path("config/series.yaml")
 _BASE_DATE = "2020-01-01"
@@ -184,7 +193,18 @@ def build_dri(
         carry = comp.get("carry_forward", False)
         if carry and cadence in FFILL_LIMIT_MONTHS:
             limit = FFILL_LIMIT_MONTHS[cadence]
+            last_real = panel_df[cid].last_valid_index()
             panel_df[cid] = panel_df[cid].ffill(limit=limit)
+            # Only warn about trailing fills (past the last real observation).
+            # Historical inter-period gaps (e.g. quarterly series) are expected
+            # and not worth surfacing.
+            if last_real is not None:
+                trailing = int(panel_df[cid].loc[last_real:].iloc[1:].notna().sum())
+                if trailing > 0:
+                    log.warning(
+                        "%s: carry-forward filled %d month(s) past last real obs (%s)",
+                        cid, trailing, last_real.strftime("%Y-%m"),
+                    )
 
     # --- Step 7: determine valid date range ---
     # Start: first month where all in-index, non-derived, non-deferred components have data.
@@ -251,7 +271,24 @@ def build_dri(
 
     # --- Step 10: compute DRI composite (in-index components only) ---
     comp_cols = list(normalized_weights.index)
+
+    # Identify rows where any material-weight component is missing after carry-forward.
+    # sum(axis=1, skipna=True) would silently treat those NaN as 0 and publish a
+    # structurally wrong composite. Instead, suppress those rows to NaN so they are
+    # dropped by the dropna() in step 12.
+    material_cols = [c for c in comp_cols if normalized_weights[c] > MATERIAL_WEIGHT_THRESHOLD]
+    missing_material = rebased[material_cols].isna().any(axis=1)
+    if missing_material.any():
+        for dt in missing_material[missing_material].index:
+            absent = [c for c in material_cols if pd.isna(rebased.loc[dt, c])]
+            missing_pct = normalized_weights[absent].sum() * 100
+            log.warning(
+                "%s: DRI suppressed — %s missing (%.0f%% of index weight)",
+                pd.Timestamp(dt).strftime("%Y-%m"), absent, missing_pct,
+            )
+
     dri = (rebased[comp_cols] * normalized_weights).sum(axis=1)
+    dri[missing_material] = float("nan")
 
     # --- Step 11: rebase CPI for comparison ---
     cpi_raw = _to_monthly(timeseries["cpi_headline"], "last")

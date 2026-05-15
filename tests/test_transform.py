@@ -272,10 +272,12 @@ def test_carry_forward_monthly_fills_exactly_1(tmp_path):
     result = build_dri(ts, {}, config_path=cfg_path)
     panel = result.panel.set_index("date")
 
-    # 2022-04: one month beyond last real obs — should be filled
+    # 2022-04: one month beyond last real obs — should be filled and row present
+    assert pd.Timestamp("2022-04-01") in panel.index
     assert not pd.isna(panel.loc[pd.Timestamp("2022-04-01"), "comp_a"])
-    # 2022-05: two months beyond — should be NaN (limit=1)
-    assert pd.isna(panel.loc[pd.Timestamp("2022-05-01"), "comp_a"])
+    # 2022-05+: comp_a is NaN (limit=1 exhausted) and has 50% weight → DRI suppressed
+    # → those rows are dropped from the output panel entirely
+    assert pd.Timestamp("2022-05-01") not in panel.index
 
 
 def test_cc_interest_excluded_vs_included_changes_dri(tmp_path):
@@ -384,8 +386,11 @@ def test_carry_forward_quarterly_fills_exactly_3(tmp_path):
     result = build_dri(ts, {}, config_path=cfg_path)
     panel = result.panel.set_index("date")
 
-    # 2022-04, 2022-05, 2022-06: within 3 months — should be filled
+    # 2022-04, 2022-05, 2022-06: within 3 months — filled, rows present in output
     for m in ["2022-04-01", "2022-05-01", "2022-06-01"]:
-        assert not pd.isna(panel.loc[pd.Timestamp(m), "comp_q"]), f"{m} should be filled"
-    # 2022-07: 4 months beyond — should be NaN
-    assert pd.isna(panel.loc[pd.Timestamp("2022-07-01"), "comp_q"])
+        ts_ = pd.Timestamp(m)
+        assert ts_ in panel.index, f"{m} should be in panel"
+        assert not pd.isna(panel.loc[ts_, "comp_q"]), f"{m} comp_q should be filled"
+    # 2022-07+: comp_q is NaN (limit=3 exhausted) and has 50% weight → DRI suppressed
+    # → those rows are dropped from the output panel entirely
+    assert pd.Timestamp("2022-07-01") not in panel.index

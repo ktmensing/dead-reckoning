@@ -21,7 +21,7 @@ import yaml
 from src.fetch import FetchError, RAW_DIR, bls, eia
 from src.fetch import fred as fred_module
 from src.fetch import zillow as zillow_module
-from src.fetch.mercury import build_mercury
+from src.fetch.mercury import build_mercury, calculate_partisan_distortion
 from src.publish.datawrapper_csv import (
     publish_dri_components,
     publish_dri_component_table,
@@ -29,6 +29,7 @@ from src.publish.datawrapper_csv import (
     publish_dri_vs_cpi,
     publish_mercury,
     publish_mercury_metadata,
+    publish_partisan_distortion,
 )
 from src.store import save_derived
 from src.transform.dri import build_dri
@@ -80,6 +81,7 @@ def main() -> None:
     components = cfg["dri_components"]
     cpi_cfg = cfg["cpi_headline"]
     mercury_comps = cfg.get("mercury_components", [])
+    mercury_caveats = cfg.get("mercury_caveats", [])
 
     # --- Collect series IDs by source ---
     bls_ids = []
@@ -109,11 +111,12 @@ def main() -> None:
 
     bls_ids.append(cpi_cfg["series_id"])
 
-    # "oecd" source uses FRED as the data provider (USACSCICP02STSAM is FRED-hosted)
+    # "oecd" source uses FRED as the data provider (USACSCICP02STSAM is FRED-hosted).
+    # mercury_caveats (e.g. MICH for partisan distortion) are fetched the same way.
     mercury_fred_ids = {
         comp["series_id"]: comp["id"]
-        for comp in mercury_comps
-        if comp["source"] in ("fred", "oecd") and comp.get("id") and comp.get("series_id")
+        for comp in mercury_comps + mercury_caveats
+        if comp.get("source") in ("fred", "oecd") and comp.get("id") and comp.get("series_id")
     }
     fred_ids.extend(mercury_fred_ids.keys())
 
@@ -305,10 +308,12 @@ def main() -> None:
     try:
         dri_series = panel.set_index("date")["dri"]
 
-        sentiment_sources = {}
-        for comp in mercury_comps:
-            if comp["source"] == "fred" and comp["id"] in timeseries:
-                sentiment_sources[comp["id"]] = timeseries[comp["id"]].set_index("date")["value"]
+        # Include all mercury_comps present in timeseries (fred, oecd, manual).
+        sentiment_sources = {
+            comp["id"]: timeseries[comp["id"]].set_index("date")["value"]
+            for comp in mercury_comps
+            if comp.get("id") and comp["id"] in timeseries
+        }
 
         if not sentiment_sources:
             _die("Mercury build failed: no sentiment sources found in fetched data")
@@ -323,6 +328,22 @@ def main() -> None:
         print(f"  Wrote {path} ({len(mercury_df)} rows)")
     except Exception as exc:
         _die(f"Mercury build failed: {exc}")
+
+    # --- 8b. Partisan distortion cross-check ---
+    print("Calculating partisan distortion...")
+    partisan_df = None
+    try:
+        mich_ts = timeseries.get("umich_expectations")
+        if mich_ts is None:
+            raise ValueError("umich_expectations (MICH) not in timeseries — check mercury_caveats fetch")
+        mich_series = mich_ts.set_index("date")["value"]
+        dri_for_partisan = panel.set_index("date")["dri"]
+        partisan_df = calculate_partisan_distortion(mich_series, dri_for_partisan)
+        path = save_derived("partisan_distortion", partisan_df)
+        print(f"  Wrote {path} ({len(partisan_df)} rows, "
+              f"{int((partisan_df['partisan_flag'] == 1).sum())} flagged months)")
+    except Exception as exc:
+        print(f"  Warning: partisan distortion calculation failed: {exc}")
 
     # --- 9. Publish ---
     print("Publishing Datawrapper CSVs...")
@@ -339,6 +360,9 @@ def main() -> None:
         print("  data/published/mercury.csv")
         publish_mercury_metadata(mercury_freshness, mercury_comps)
         print("  data/published/mercury_metadata.csv")
+        if partisan_df is not None and not partisan_df.empty:
+            publish_partisan_distortion(partisan_df)
+            print("  data/published/partisan_distortion.csv")
     except Exception as exc:
         _die(f"Publish step failed: {exc}")
 

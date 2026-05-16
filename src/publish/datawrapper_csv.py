@@ -246,3 +246,15 @@ def publish_mercury_metadata(
         "age_days", "status", "carried_forward", "weight",
     ])
     save_published("mercury_metadata", out)
+
+
+def publish_partisan_distortion(partisan: pd.DataFrame) -> None:
+    """Write partisan_distortion.csv — Mercury caveat annotation overlay.
+
+    Columns: [Date, MICH, DRI YoY %, Gap (pp), Gap (z), Partisan Flag]
+    Flag=1 when |gap_z| > 1.0 SD: MICH is far from felt conditions.
+    """
+    out = partisan.copy()
+    out["date"] = pd.to_datetime(out["date"]).dt.strftime("%Y-%m-%d")
+    out.columns = ["Date", "MICH", "DRI YoY %", "Gap (pp)", "Gap (z)", "Partisan Flag"]
+    save_published("partisan_distortion", out)

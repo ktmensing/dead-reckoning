@@ -1,5 +1,5 @@
 import pandas as pd
-from typing import Dict
+from typing import Dict, Optional
 
 def z_score(s: pd.Series, window: int = 60) -> pd.Series:
     """Calculate rolling z-score for a series."""
@@ -64,4 +64,44 @@ def build_mercury(
         "sentiment_z": composite_sentiment.reindex(idx).values,
         "conditions_z": conditions_z.reindex(idx).values,
         "zone": divergence.apply(assign_zone).values,
+    }).dropna()
+
+
+def calculate_partisan_distortion(
+    mich: pd.Series,
+    dri: pd.Series,
+    window: int = 60,
+) -> pd.DataFrame:
+    """
+    Partisan distortion cross-check.
+
+    Compares households' inflation expectations (MICH, percent) against felt
+    inflation (DRI year-over-year, percent). When the standardized gap exceeds
+    one standard deviation in absolute value, MICH is far from where felt
+    conditions would suggest — a flag that sentiment reads may be politically
+    rather than economically driven.
+
+    Both inputs are in percentage points; subtraction is unit-consistent.
+    """
+    mich_m = mich.resample("ME").last()
+    # ffill bridges any suppressed/absent DRI months (e.g. Nov 2025) before
+    # computing pct_change, so a single NaN does not blank the rolling z_score.
+    dri_m = dri.resample("ME").last().ffill()
+    dri_yoy = dri_m.pct_change(12, fill_method=None) * 100  # percent
+
+    common = mich_m.index.intersection(dri_yoy.index)
+    mich_m = mich_m.loc[common]
+    dri_yoy = dri_yoy.loc[common]
+
+    gap_pp = mich_m - dri_yoy
+    gap_z = z_score(gap_pp, window=window)
+    flag = (gap_z.abs() > 1.0).astype(int)
+
+    return pd.DataFrame({
+        "date": common,
+        "mich": mich_m.values,
+        "dri_yoy_pct": dri_yoy.values,
+        "gap_pp": gap_pp.values,
+        "gap_z": gap_z.values,
+        "partisan_flag": flag.values,
     }).dropna()

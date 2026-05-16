@@ -53,6 +53,10 @@ MATERIAL_WEIGHT_THRESHOLD = 0.05
 
 _CONFIG_PATH = Path("config/series.yaml")
 _BASE_DATE = "2020-01-01"
+# Panel history extends back to this date when components have sufficient data.
+# Components that only start after this date (e.g. quarterly_reserve) don't constrain
+# the historical start; they simply don't contribute until their first observation.
+_HISTORY_START = pd.Timestamp("2000-01-01")
 
 # Months to forward-fill per cadence when carry_forward=true.
 # Limits projection to one cadence period so stale data doesn't silently
@@ -110,6 +114,37 @@ def _compute_mortgage_payment(
     return pd.Series(payment, index=common_idx, name="mortgage_payment")
 
 
+def build_rent_with_backfill(zori: pd.Series, bls_rent: pd.Series) -> pd.Series:
+    """Chain-link BLS CPI rent pre-ZORI to extend rent history back to 2000.
+
+    Preserves ZORI's level and percent changes from ZORI's first observation
+    onward.  Uses BLS CPI Rent of Primary Residence (CUSR0000SEHA) percent
+    changes to extend history backward — same conceptual measure, different
+    sampling methodology.  The splice point is ZORI's earliest observation.
+    """
+    zori_start = zori.index.min()
+
+    # BLS region: all months up to (but not including) the ZORI splice point.
+    bls_pre = bls_rent.loc[:zori_start].dropna()
+    bls_pre = bls_pre.iloc[:-1]   # drop the overlap month (zori_start itself)
+    bls_pct = bls_pre.pct_change()
+
+    # Walk backward from ZORI's first value, applying BLS percent changes in reverse.
+    # value[t-1] = value[t] / (1 + pct_change[t])
+    extended: list = [zori.loc[zori_start]]
+    dates: list = [zori_start]
+    for date in reversed(bls_pct.index):
+        prev_value = extended[-1] / (1 + bls_pct.loc[date])
+        extended.append(prev_value)
+        dates.append(date)
+
+    pre = pd.Series(
+        list(reversed(extended[1:])),
+        index=list(reversed(dates[1:])),
+    )
+    return pd.concat([pre, zori]).sort_index()
+
+
 def build_dri(
     timeseries: dict,
     freshness_reports: dict,
@@ -152,6 +187,14 @@ def build_dri(
         method = comp.get("resample_method", "last")
         monthly[cid] = _to_monthly(timeseries[cid], method)
 
+        # Apply rent backfill splice if configured (ZORI pre-2015 → BLS chain-link)
+        if cid == "rent" and comp.get("backfill_series_id"):
+            bsid = comp["backfill_series_id"]
+            if bsid in timeseries:
+                bls_rent_m = _to_monthly(timeseries[bsid], "last")
+                monthly[cid] = build_rent_with_backfill(monthly[cid], bls_rent_m)
+                log.info("rent: applied pre-2015 chain-link from %s", bsid)
+
     # --- Step 2: derive mortgage_payment ---
     if "MSPUS" in timeseries and "MORTGAGE30US" in timeseries:
         mspus_m = _to_monthly(timeseries["MSPUS"], "last")
@@ -183,8 +226,10 @@ def build_dri(
     panel_df.index.name = "date"
 
     # --- Step 6: apply carry-forward per component ---
-    # Must happen AFTER pd.DataFrame(monthly) so the full union index is available;
-    # ffill on a standalone sparse Series cannot extend beyond its own last row.
+    # Must happen AFTER pd.DataFrame(monthly) so the full union index is available.
+    # Two-pass fill: interpolate fills interior NaN gaps (e.g. BLS publication
+    # interruptions); ffill handles trailing gaps (from last real obs to panel end).
+    # limit=N prevents filling beyond one cadence period in either direction.
     for comp in components:
         cid = comp["id"]
         if cid not in panel_df.columns:
@@ -194,10 +239,14 @@ def build_dri(
         if carry and cadence in FFILL_LIMIT_MONTHS:
             limit = FFILL_LIMIT_MONTHS[cadence]
             last_real = panel_df[cid].last_valid_index()
-            panel_df[cid] = panel_df[cid].ffill(limit=limit)
-            # Only warn about trailing fills (past the last real observation).
-            # Historical inter-period gaps (e.g. quarterly series) are expected
-            # and not worth surfacing.
+
+            panel_df[cid] = (
+                panel_df[cid]
+                .interpolate(method="linear", limit=limit, limit_area="inside")
+                .ffill(limit=limit)
+            )
+
+            # Warn about trailing fills (past last real observation).
             if last_real is not None:
                 trailing = int(panel_df[cid].loc[last_real:].iloc[1:].notna().sum())
                 if trailing > 0:
@@ -206,8 +255,25 @@ def build_dri(
                         cid, trailing, last_real.strftime("%Y-%m"),
                     )
 
+            # Warn about NaN that remain within the component's active range
+            # (from first real observation onward). Pre-history NaN (before the
+            # component starts) are expected and removed by the date-range clip.
+            first_valid = panel_df[cid].first_valid_index()
+            if first_valid is not None:
+                remaining = int(panel_df[cid].loc[first_valid:].isna().sum())
+                if remaining > 0:
+                    log.warning(
+                        "%s: %d NaN(s) remain within active range after fill "
+                        "— gap exceeded carry_forward limit (%d months)",
+                        cid, remaining, limit,
+                    )
+
     # --- Step 7: determine valid date range ---
-    # Start: first month where all in-index, non-derived, non-deferred components have data.
+    # Start: earliest month where all "early" in-index components have data.
+    # "Early" means first data predates _HISTORY_START — late-starting components
+    # (e.g. quarterly_reserve, which only begins in 2020) don't constrain
+    # how far back the panel extends. They simply contribute NaN (which becomes
+    # zero-weighted via the suppression check in step 10) until their first obs.
     in_index_ids = [
         c["id"] for c in components
         if not c.get("deferred")
@@ -215,18 +281,25 @@ def build_dri(
         and c["source"] != "derived"
         and c["id"] in panel_df.columns
     ]
-    first_valids = [
-        panel_df[cid].first_valid_index()
+    all_first_valids = {
+        cid: panel_df[cid].first_valid_index()
         for cid in in_index_ids
         if panel_df[cid].first_valid_index() is not None
-    ]
-    # Also consider mortgage_payment start
+    }
+    # Also mortgage_payment
     if "mortgage_payment" in panel_df.columns:
         mp_start = panel_df["mortgage_payment"].first_valid_index()
         if mp_start is not None:
-            first_valids.append(mp_start)
-    if first_valids:
-        panel_df = panel_df.loc[max(first_valids):]
+            all_first_valids["mortgage_payment"] = mp_start
+
+    # Separate components that reach back to the history start from late starters.
+    early_starts = [v for v in all_first_valids.values() if v <= _HISTORY_START]
+    if early_starts:
+        # Start where all early-history components first have data.
+        panel_df = panel_df.loc[max(early_starts):]
+    elif all_first_valids:
+        # No component reaches the history start — fall back to max as before.
+        panel_df = panel_df.loc[max(all_first_valids.values()):]
 
     # End: last month where BLS in-index components have data.
     bls_in_index = [
@@ -272,23 +345,31 @@ def build_dri(
     # --- Step 10: compute DRI composite (in-index components only) ---
     comp_cols = list(normalized_weights.index)
 
-    # Identify rows where any material-weight component is missing after carry-forward.
-    # sum(axis=1, skipna=True) would silently treat those NaN as 0 and publish a
-    # structurally wrong composite. Instead, suppress those rows to NaN so they are
-    # dropped by the dropna() in step 12.
+    # Identify rows where a material-weight component is missing AND has already
+    # started (i.e., its first real observation is on or before this date).
+    # Components that haven't started yet (e.g. quarterly_reserve before 2020-01)
+    # are expected to be NaN and must not suppress the historical DRI.
     material_cols = [c for c in comp_cols if normalized_weights[c] > MATERIAL_WEIGHT_THRESHOLD]
-    missing_material = rebased[material_cols].isna().any(axis=1)
-    if missing_material.any():
-        for dt in missing_material[missing_material].index:
-            absent = [c for c in material_cols if pd.isna(rebased.loc[dt, c])]
-            missing_pct = normalized_weights[absent].sum() * 100
+    first_valid_per_comp = {c: rebased[c].first_valid_index() for c in material_cols}
+
+    suppress_mask = pd.Series(False, index=rebased.index)
+    for dt in rebased.index:
+        real_absent = [
+            c for c in material_cols
+            if pd.isna(rebased.loc[dt, c])
+            and first_valid_per_comp[c] is not None
+            and dt >= first_valid_per_comp[c]
+        ]
+        if real_absent:
+            missing_pct = normalized_weights[real_absent].sum() * 100
             log.warning(
                 "%s: DRI suppressed — %s missing (%.0f%% of index weight)",
-                pd.Timestamp(dt).strftime("%Y-%m"), absent, missing_pct,
+                pd.Timestamp(dt).strftime("%Y-%m"), real_absent, missing_pct,
             )
+            suppress_mask[dt] = True
 
     dri = (rebased[comp_cols] * normalized_weights).sum(axis=1)
-    dri[missing_material] = float("nan")
+    dri[suppress_mask] = float("nan")
 
     # --- Step 11: rebase CPI for comparison ---
     cpi_raw = _to_monthly(timeseries["cpi_headline"], "last")

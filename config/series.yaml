@@ -31,13 +31,17 @@ dri_components:
     expected_lag_days: 50             # ZORI typically releases 20–25 days after month-end
     hard_fail_days: 110
     carry_forward: true
+    backfill_source: bls
+    backfill_series_id: CUSR0000SEHA    # CPI Rent of Primary Residence, SA
+    backfill_until: "2014-12-31"
     notes: |
+      ZORI 2015-01+. Pre-2015 chain-linked to BLS CPI rent of primary residence (CUSR0000SEHA).
+      Methodologically defensible: same conceptual measure (residential rent paid), different
+      sampling (BLS smoothed in-place rent; ZORI asking rent for new listings). Chain-linking
+      preserves ZORI's level and percent changes from 2015 onward; uses BLS percent changes
+      for 2000-2014 history only.
       Zillow Observed Rent Index — smoothed, seasonally adjusted, SFR + condo + multifamily.
       National rolling average (RegionType=country, RegionName="United States").
-      Chosen over Apartment List (apartments only) and BLS rent of primary residence (smoothed
-      in-place rent rather than asking rent) because it covers a broader rental market and
-      matches the felt-cost framing of the DRI. Apartment List documented as an alternative;
-      fetcher not built — see apartmentlist.com/research/national-rent-data.
 
   - id: mortgage_payment
     weight: 0.11
@@ -175,46 +179,54 @@ cpi_headline:
   notes: "CPI all items, seasonally adjusted. Used as the official comparison line."
 
 mercury_components:
-  - id: umich_expectations
-    source: fred
-    series_id: MICH
-    cadence: monthly
-    expected_lag_days: 75   # Observation date = survey month; FRED publishes ~30d later and may revise ~45d later
-    hard_fail_days: 120
-    carry_forward: false
-    weight: 0.2
-    notes: "U-Mich Inflation Expectation (1 year). Monthly."
-
   - id: umich
     source: fred
     series_id: UMCSENT
     cadence: monthly
-    expected_lag_days: 75   # Same publication cadence as MICH
-    hard_fail_days: 120
-    carry_forward: false
-    weight: 0.35
-    notes: "U-Mich Consumer Sentiment. Monthly."
+    expected_lag_days: 50
+    hard_fail_days: 100
+    carry_forward: true
+    weight: 0.45
+    notes: "U-Mich Consumer Sentiment headline (ICS). Monthly."
+
+  - id: conference_board
+    source: manual
+    series_id: conference_board
+    manual_csv: data/raw/manual/ccb.csv
+    cadence: monthly
+    expected_lag_days: 50
+    hard_fail_days: 100
+    carry_forward: true
+    weight: 0.45
+    notes: |
+      Conference Board Consumer Confidence headline. Manually populated from
+      conference-board.org monthly press release (one number per month).
 
   - id: oecd_confidence
     source: oecd
     series_id: USACSCICP02STSAM
     cadence: monthly
-    expected_lag_days: 75
-    hard_fail_days: 120
-    carry_forward: false
-    weight: 0.1
-    notes: "OECD Consumer Opinion Surveys: Composite Consumer Confidence for United States"
-
-  - id: conference_board
-    weight: 0.35
-    series_id: conference_board
-    source: manual
-    manual_csv: data/raw/manual/ccb.csv
-    cadence: monthly
-    expected_lag_days: 75
-    hard_fail_days: 120
+    expected_lag_days: 50
+    hard_fail_days: 100
     carry_forward: true
-    notes: "Conference Board Consumer Confidence. Monthly."
+    weight: 0.10
+    notes: |
+      OECD Consumer Confidence Indicator for the United States (amplitude adjusted).
+
+mercury_caveats:
+  - id: umich_expectations
+    source: fred
+    series_id: MICH
+    cadence: monthly
+    expected_lag_days: 50
+    hard_fail_days: 100
+    carry_forward: true
+    notes: |
+      U-Mich 1-Year Inflation Expectation (median). Not part of the Mercury
+      sentiment composite. Used as the Partisan Distortion cross-check —
+      when MICH diverges from felt inflation (DRI YoY) by more than ~1 std
+      dev, sentiment readings may be politically driven rather than
+      economically grounded.
 
   # DRI from Phase 1 already in store — no new fetch needed.
 

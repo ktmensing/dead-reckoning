@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 import yaml
 
-from src.transform.dri import _compute_mortgage_payment, _to_monthly, build_dri
+from src.transform.dri import _compute_mortgage_payment, _to_monthly, build_dri, build_rent_with_backfill
 
 
 # ---------------------------------------------------------------------------
@@ -394,3 +394,83 @@ def test_carry_forward_quarterly_fills_exactly_3(tmp_path):
     # 2022-07+: comp_q is NaN (limit=3 exhausted) and has 50% weight → DRI suppressed
     # → those rows are dropped from the output panel entirely
     assert pd.Timestamp("2022-07-01") not in panel.index
+
+
+# ---------------------------------------------------------------------------
+# Interior-gap interpolation
+# ---------------------------------------------------------------------------
+
+def test_interior_gap_interpolated(tmp_path):
+    """A single-month interior NaN in a carry_forward component is filled by
+    linear interpolation; the DRI for that month is present and consistent."""
+    dates = pd.date_range("2019-01-01", "2022-12-01", freq="MS")
+    values = [float(i + 100) for i in range(len(dates))]
+
+    # Punch a hole in comp_a at 2021-06: NaN between real values on both sides.
+    hole_idx = list(dates).index(pd.Timestamp("2021-06-01"))
+    values[hole_idx] = float("nan")
+
+    ts = {
+        "comp_a": pd.DataFrame({
+            "date": dates, "value": values,
+            "series_id": "A", "source": "test", "fetched_at": pd.Timestamp.utcnow(),
+        }),
+        "cpi_headline": _monthly_series("2019-01-01", "2022-12-01", 250.0),
+    }
+    components = [
+        {"id": "comp_a", "weight": 1.0, "source": "test", "series_id": "A",
+         "cadence": "monthly", "carry_forward": True},
+    ]
+    cfg_path = _minimal_config(tmp_path, components)
+    result = build_dri(ts, {}, config_path=cfg_path)
+    panel = result.panel.set_index("date")
+
+    # 2021-06 should be present (interior gap filled, not suppressed)
+    assert pd.Timestamp("2021-06-01") in panel.index, "interior gap row should be in panel"
+    assert not pd.isna(panel.loc[pd.Timestamp("2021-06-01"), "comp_a"]), \
+        "interior gap should be interpolated, not NaN"
+
+    # The interpolated value should be between the surrounding real values
+    may_val = panel.loc[pd.Timestamp("2021-05-01"), "comp_a"]
+    jul_val = panel.loc[pd.Timestamp("2021-07-01"), "comp_a"]
+    jun_val = panel.loc[pd.Timestamp("2021-06-01"), "comp_a"]
+    assert min(may_val, jul_val) <= jun_val <= max(may_val, jul_val), \
+        f"interpolated {jun_val:.2f} not between {may_val:.2f} and {jul_val:.2f}"
+
+    # DRI for that month should be non-NaN and consistent with neighbors
+    assert not pd.isna(panel.loc[pd.Timestamp("2021-06-01"), "dri"])
+
+
+def test_long_gap_does_not_crash(tmp_path):
+    """A gap longer than carry_forward limit logs a warning but does not crash;
+    the component is absent from those months' DRI (suppressed via material check
+    if weight > 5%, or zero-weighted via skipna if weight < 5%)."""
+    dates = pd.date_range("2019-01-01", "2022-12-01", freq="MS")
+    values = list(range(100, 100 + len(dates)))
+
+    # Punch a 6-month gap in a low-weight component (3%) — should not suppress DRI
+    for i, d in enumerate(dates):
+        if pd.Timestamp("2021-03-01") <= d <= pd.Timestamp("2021-08-01"):
+            values[i] = float("nan")
+
+    ts = {
+        "comp_a": _monthly_series("2019-01-01", "2022-12-01", 100.0),
+        "comp_b": pd.DataFrame({
+            "date": dates, "value": [float(v) for v in values],
+            "series_id": "B", "source": "test", "fetched_at": pd.Timestamp.utcnow(),
+        }),
+        "cpi_headline": _monthly_series("2019-01-01", "2022-12-01", 250.0),
+    }
+    # comp_b has weight 0.03 — below the 5% material threshold, so gap won't suppress DRI
+    components = [
+        {"id": "comp_a", "weight": 0.97, "source": "test", "series_id": "A"},
+        {"id": "comp_b", "weight": 0.03, "source": "test", "series_id": "B",
+         "cadence": "monthly", "carry_forward": True},
+    ]
+    cfg_path = _minimal_config(tmp_path, components)
+    result = build_dri(ts, {}, config_path=cfg_path)  # must not raise
+
+    panel = result.panel.set_index("date")
+    # Gap months should still be in the panel (comp_b is below material threshold)
+    assert pd.Timestamp("2021-06-01") in panel.index
+    assert not pd.isna(panel.loc[pd.Timestamp("2021-06-01"), "dri"])

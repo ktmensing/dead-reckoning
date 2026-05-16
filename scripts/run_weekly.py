@@ -111,6 +111,11 @@ def main() -> None:
 
     bls_ids.append(cpi_cfg["series_id"])
 
+    # Add backfill source series IDs (e.g. CUSR0000SEHA for rent pre-2015 splice)
+    for comp in components:
+        if comp.get("backfill_source") == "bls" and comp.get("backfill_series_id"):
+            bls_ids.append(comp["backfill_series_id"])
+
     # "oecd" source uses FRED as the data provider (USACSCICP02STSAM is FRED-hosted).
     # mercury_caveats (e.g. MICH for partisan distortion) are fetched the same way.
     mercury_fred_ids = {
@@ -128,7 +133,9 @@ def main() -> None:
     # --- 1. Fetch BLS batch ---
     print(f"Fetching {len(bls_ids)} BLS series in one batch call...")
     try:
-        bls_results = bls.fetch_batch(bls_ids, start_year=2019)
+        # start_year=1999 extends history to 2000-01 for all BLS series;
+        # the fetcher pages through 20-year windows automatically.
+        bls_results = bls.fetch_batch(bls_ids, start_year=1999)
     except Exception as exc:
         _die(f"BLS batch fetch failed: {exc}")
 

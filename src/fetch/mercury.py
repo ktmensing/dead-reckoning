@@ -95,7 +95,7 @@ def calculate_partisan_distortion(
 
     gap_pp = mich_m - dri_yoy
     gap_z = z_score(gap_pp, window=window)
-    flag = (gap_z.abs() > 1.0).astype(int)
+    flag = (gap_z.abs() > 1.65).astype(int)
 
     return pd.DataFrame({
         "date": common,

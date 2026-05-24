@@ -10,4 +10,4 @@ utilities,CUSR0000SEHF,monthly,2026-04-01,53,stale_ok,True,True,0.031915
 used_cars,CUSR0000SETA02,monthly,2026-04-01,53,stale_ok,True,True,0.042553
 eggs,APU0000708111,monthly,2026-04-01,53,stale_ok,True,True,0.031915
 home_insurance,CUUR0000SEHD,monthly,2026-04-01,53,stale_ok,True,True,0.031915
-quarterly_reserve,(derived),quarterly,2026-03-01,84,fresh,False,True,0.106383
+quarterly_reserve,(derived),quarterly,2026-04-01,53,fresh,False,True,0.106383

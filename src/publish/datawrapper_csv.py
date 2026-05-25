@@ -211,7 +211,22 @@ def publish_mercury(mercury_df: pd.DataFrame) -> None:
     out = out.dropna(subset=["Divergence"])
     save_published("mercury", out)
 
+def publish_mercury_rolling(mercury_df: pd.DataFrame, months: int = 24) -> None:
+    """Write mercury_rolling.csv — same as mercury.csv but trimmed to a
+    rolling window for the Territory weekly chart. Full history lives in
+    mercury.csv for the methodology/reference page.
 
+    Columns: [Date, Divergence, Sentiment Z, Conditions Z]
+    """
+    cutoff = pd.Timestamp.now() - pd.DateOffset(months=months)
+    out = mercury_df[mercury_df["date"] >= cutoff][
+        ["date", "divergence", "sentiment_z", "conditions_z"]
+    ].copy()
+    out.columns = ["Date", "Divergence", "Sentiment Z", "Conditions Z"]
+    out["Date"] = pd.to_datetime(out["Date"]).dt.strftime("%Y-%m-%d")
+    out = out.dropna(subset=["Divergence"])
+    save_published("mercury_rolling", out)
+    
 def publish_mercury_metadata(
     freshness: dict,
     mercury_comps: list,

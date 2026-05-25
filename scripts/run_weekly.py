@@ -28,6 +28,7 @@ from src.publish.datawrapper_csv import (
     publish_dri_metadata,
     publish_dri_vs_cpi,
     publish_mercury,
+    publish_mercury_rolling,
     publish_mercury_metadata,
     publish_partisan_distortion,
 )
@@ -370,6 +371,8 @@ def main() -> None:
         print("  data/published/dri_metadata.csv")
         publish_mercury(mercury_df)
         print("  data/published/mercury.csv")
+        publish_mercury_rolling(mercury_df)
+        print("  data/published/mercury_rolling.csv")
         publish_mercury_metadata(mercury_freshness, mercury_comps)
         print("  data/published/mercury_metadata.csv")
         if partisan_df is not None and not partisan_df.empty:

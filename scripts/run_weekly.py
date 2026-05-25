@@ -205,6 +205,11 @@ def main() -> None:
         if "value" not in df.columns or "date" not in df.columns:
             print(f"  WARNING: {path} missing required columns [date, value] — skipping")
             continue
+        # Snap release-date timestamps to first-of-month so they align with
+        # FRED-sourced series (YYYY-MM-01 convention). Dedupe in case two
+        # releases fall in the same month; keep the later one.
+        df["date"] = df["date"].dt.to_period("M").dt.to_timestamp()
+        df = df.sort_values("date").drop_duplicates(subset=["date"], keep="last")
         df["series_id"] = comp["id"]
         df["source"] = "manual"
         df["fetched_at"] = pd.Timestamp.utcnow()

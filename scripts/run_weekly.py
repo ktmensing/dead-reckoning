@@ -27,6 +27,7 @@ from src.publish.datawrapper_csv import (
     publish_dri_component_table,
     publish_dri_metadata,
     publish_dri_vs_cpi,
+    publish_dri_b, 
     publish_mercury,
     publish_mercury_rolling,
     publish_mercury_metadata,
@@ -34,7 +35,9 @@ from src.publish.datawrapper_csv import (
 )
 from src.store import save_derived
 from src.transform.dri import build_dri
+from src.transform.dri_b import build_dri_b
 from src.validate import ValidationError, assess_freshness
+
 
 
 def _load_config() -> dict:
@@ -126,6 +129,25 @@ def main() -> None:
     }
     fred_ids.extend(mercury_fred_ids.keys())
 
+    def _collect_dri_b_fred_ids(cfg: dict) -> list:
+        """Return FRED series IDs needed for DRI-B components."""
+        dri_b_comps = cfg.get("dri_b_components", [])
+        return [
+            comp["series_id"]
+            for comp in dri_b_comps
+            if comp.get("source") == "fred" and comp.get("series_id")
+        ]
+
+    dri_b_fred_ids = _collect_dri_b_fred_ids(cfg)
+    fred_ids.extend(dri_b_fred_ids)
+
+    # Build lookup to remap dri_b FRED series IDs to component IDs
+    dri_b_fred_id_to_comp = {
+        comp["series_id"]: comp["id"]
+        for comp in cfg.get("dri_b_components", [])
+        if comp.get("source") == "fred" and comp.get("series_id")
+    }
+
     bls_ids = list(dict.fromkeys(bls_ids))
     fred_ids = list(dict.fromkeys(fred_ids))
 
@@ -180,6 +202,8 @@ def main() -> None:
             timeseries[fred_series_id_to_comp[sid]] = df  # e.g. cc_interest
         elif sid in mercury_fred_ids:
             timeseries[mercury_fred_ids[sid]] = df        # e.g. umich_expectations
+        elif sid in dri_b_fred_id_to_comp:
+            timeseries[dri_b_fred_id_to_comp[sid]] = df   # e.g. savings_rate, debt_service_ratio
         else:
             timeseries[sid] = df
 
@@ -215,6 +239,29 @@ def main() -> None:
         df["source"] = "manual"
         df["fetched_at"] = pd.Timestamp.utcnow()
         timeseries[comp["id"]] = df.sort_values("date").reset_index(drop=True)
+
+    # --- 3c. Load manual CSVs for DRI-B components ---
+    dri_b_manual = [
+        c for c in cfg.get("dri_b_components", [])
+        if c.get("source") == "manual" and c.get("id")
+    ]
+    for comp in dri_b_manual:
+        path = Path(comp["manual_csv"])
+        if not path.exists():
+            print(f"  WARNING: DRI-B manual CSV for {comp['id']} not found at {path} — skipping")
+            continue
+        df = pd.read_csv(path, parse_dates=["date"])
+        if "value" not in df.columns or "date" not in df.columns:
+            print(f"  WARNING: {path} missing required columns [date, value] — skipping")
+            continue
+        # Normalize to first-of-month (same fix as CCB)
+        df["date"] = df["date"].dt.to_period("M").dt.to_timestamp()
+        df = df.sort_values("date").drop_duplicates(subset=["date"], keep="last")
+        df["series_id"] = comp["id"]
+        df["source"] = "manual"
+        df["fetched_at"] = pd.Timestamp.utcnow()
+        timeseries[comp["id"]] = df.sort_values("date").reset_index(drop=True)
+        print(f"  Loaded DRI-B {comp['id']}: {len(df)} rows through {df['date'].max().strftime('%Y-%m')}")
 
     # --- 4. Fetch EIA series ---
     print(f"Fetching {len(eia_ids)} EIA series...")
@@ -358,6 +405,30 @@ def main() -> None:
     except Exception as exc:
         print(f"  Warning: partisan distortion calculation failed: {exc}")
 
+    # --- 8c. Build DRI-B Behavior Layer ---
+    print("Building DRI-B Behavior Layer...")
+    dri_b_result = None
+    try:
+        dri_b_ids = [
+            c["id"] for c in cfg.get("dri_b_components", [])
+            if c.get("id")
+        ]
+        dri_b_series = {k: timeseries[k] for k in dri_b_ids if k in timeseries}
+
+        if not dri_b_series:
+            print("  WARNING: No DRI-B series found — check series.yaml dri_b_components")
+        else:
+            dri_b_result = build_dri_b(dri_b_series)
+            path = save_derived("dri_b_panel", dri_b_result.panel)
+            print(f"  Wrote {path}")
+            print(
+                f"  DRI-B stress signals: {dri_b_result.stress_count}/"
+                f"{dri_b_result.total_available} indicators "
+                f"({dri_b_result.stress_pct * 100:.0f}%)"
+            )
+    except Exception as exc:
+        print(f"  WARNING: DRI-B build failed: {exc}")
+
     # --- 9. Publish ---
     print("Publishing Datawrapper CSVs...")
     try:
@@ -378,6 +449,9 @@ def main() -> None:
         if partisan_df is not None and not partisan_df.empty:
             publish_partisan_distortion(partisan_df)
             print("  data/published/partisan_distortion.csv")
+        if dri_b_result is not None:
+            publish_dri_b(dri_b_result.panel)
+            print("  data/published/dri_b_table.csv")
     except Exception as exc:
         _die(f"Publish step failed: {exc}")
 

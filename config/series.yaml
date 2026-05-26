@@ -233,3 +233,113 @@ mercury_caveats:
   # Google Trends basket — pulled via pytrends, not series.yaml:
   # terms: ["recession", "layoffs", "stagflation", "vibecession"]
   # window: trailing 5-year rolling, normalized 0–100
+
+  # ============================================================
+# DRI-B: Behavior Layer
+# Add this block to config/series.yaml alongside dri_components.
+#
+# DRI-B is a dashboard of directional stress readings — not a
+# composite index. No weights. Each indicator is assessed for
+# direction (stress / relief / flat) independently.
+# ============================================================
+
+dri_b_components:
+
+  # ----------------------------------------------------------
+  # FRED automated pulls (use existing fred fetcher)
+  # ----------------------------------------------------------
+
+  - id: savings_rate
+    source: fred
+    series_id: PSAVERT
+    cadence: monthly
+    expected_lag_days: 35
+    hard_fail_days: 70
+    carry_forward: true
+    stress_direction: down
+    notes: |
+      Personal saving as % of disposable income (BLS/BEA via FRED).
+      Falling = households drawing down savings buffer = stress signal.
+      Releases ~4 weeks after month end with Personal Income & Outlays.
+
+  - id: revolving_credit
+    source: fred
+    series_id: REVOLSL
+    cadence: monthly
+    expected_lag_days: 40
+    hard_fail_days: 75
+    carry_forward: true
+    stress_direction: up
+    notes: |
+      Revolving consumer credit outstanding, seasonally adjusted ($B).
+      Rising = credit card debt accumulation = stress signal.
+      Federal Reserve G.19 Consumer Credit report, releases ~5 weeks after month end.
+
+  - id: multiple_job_holders
+    source: fred
+    series_id: LNS12026620
+    cadence: monthly
+    expected_lag_days: 10
+    hard_fail_days: 45
+    carry_forward: false
+    stress_direction: up
+    notes: |
+      Persons at work in all jobs, multiple jobholders (BLS CPS).
+      Rising = labor stress, workers supplementing income = stress signal.
+      Releases first Friday of following month with Employment Situation.
+
+  - id: debt_service_ratio
+    source: fred
+    series_id: TDSP
+    cadence: quarterly
+    expected_lag_days: 60
+    hard_fail_days: 120
+    carry_forward: true
+    stress_direction: up
+    notes: |
+      Household debt service payments as % of disposable personal income.
+      Federal Reserve Z.1 Financial Accounts, quarterly, releases ~2 months after quarter end.
+      Rising = structural financial pressure. Slow-moving but authoritative.
+
+  # ----------------------------------------------------------
+  # Manual pulls (same CSV contract as CCB: date, value, series_id)
+  # ----------------------------------------------------------
+
+  - id: nyf_sce_miss_prob
+    source: manual
+    series_id: nyf_sce_miss_prob
+    manual_csv: data/raw/manual/nyf_sce.csv
+    cadence: monthly
+    expected_lag_days: 45
+    hard_fail_days: 80
+    carry_forward: true
+    stress_direction: up
+    notes: |
+      NY Fed Survey of Consumer Expectations: mean probability (%) of missing
+      a minimum debt payment in the next 3 months. Direct proxy for
+      paycheck-to-paycheck rate — replaces discontinued LendingClub/PYMNTS series.
+
+      Pull from: https://www.newyorkfed.org/microeconomics/sce#/
+      Navigate to: Survey Results → Financial Situation → "Probability of Missing
+      a Minimum Debt Payment Over the Next 3 Months"
+      Releases: typically 2nd or 3rd Monday of the following month.
+      CSV columns: date (YYYY-MM-01), value (mean probability %), series_id (nyf_sce_miss_prob)
+
+  - id: abi_bankruptcies
+    source: manual
+    series_id: abi_bankruptcies
+    manual_csv: data/raw/manual/abi_bankruptcies.csv
+    cadence: monthly
+    expected_lag_days: 30
+    hard_fail_days: 60
+    carry_forward: false
+    stress_direction: up
+    notes: |
+      Monthly total consumer (non-business) bankruptcy filings.
+      American Bankruptcy Institute press release, releases ~3-4 weeks after month end.
+      Lagging but unambiguous — when this moves, the DRI has been right.
+
+      Pull from: https://www.abi.org/newsroom/press-releases
+      Find the monthly filing statistics press release.
+      Use total consumer filings (Chapter 7 + Chapter 13 combined).
+      CSV columns: date (YYYY-MM-01, first of filing month), value (total filings), series_id (abi_bankruptcies)

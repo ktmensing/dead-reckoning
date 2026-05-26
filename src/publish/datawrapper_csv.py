@@ -6,12 +6,15 @@ become legend labels in Datawrapper, so renames here break chart templates.
 Do not change column names without also updating any live Datawrapper charts
 that point at these files.
 
-Five outputs:
+Eight outputs:
   dri_vs_cpi.csv          Headline line chart: DRI vs official CPI
   dri_components.csv      Component contributions, wide format (stacked area)
   dri_component_table.csv Current values, MoM, YoY, weight (table chart)
   dri_metadata.csv        Freshness report: one row per component
   mercury.csv
+  mercury_rolling.csv
+  partisan_distortion.csv Mercury caveat: inflation expectations divergence
+  dri_b_table.csv         Behavior indicators: stress/relief signals (table chart)
 """
 
 from __future__ import annotations
@@ -273,3 +276,25 @@ def publish_partisan_distortion(partisan: pd.DataFrame) -> None:
     out["date"] = pd.to_datetime(out["date"]).dt.strftime("%Y-%m-%d")
     out.columns = ["Date", "MICH", "DRI YoY %", "Gap (pp)", "Gap (z)", "Partisan Flag"]
     save_published("partisan_distortion", out)
+
+
+def publish_dri_b(dri_b_panel: pd.DataFrame) -> None:
+    """Write dri_b_table.csv — one row per behavior indicator for table chart.
+
+    Columns: [Indicator, Data as of, Latest, Unit, MoM %, YoY %, Signal, Note]
+
+    'Signal' is the stress classification: stress / relief / flat / unknown / missing.
+    Positive stress_count / total gives the Territory summary line:
+    e.g. "5 of 6 DRI-B indicators pointing to stress."
+    """
+    out = dri_b_panel[[
+        "label", "latest_date", "latest_value", "unit",
+        "mom_pct", "yoy_pct", "direction", "note",
+    ]].copy()
+    out.columns = [
+        "Indicator", "Data as of", "Latest", "Unit",
+        "MoM %", "YoY %", "Signal", "Note",
+    ]
+    # Datawrapper table: replace None with em-dash for clean rendering
+    out = out.fillna("—")
+    save_published("dri_b_table", out)

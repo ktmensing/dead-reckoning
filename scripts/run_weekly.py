@@ -80,6 +80,24 @@ def _fetch_fred(sid: str, retries: int = 2, retry_delay: float = 5.0) -> pd.Data
     _die(f"FRED fetch failed for {sid} and no cache found: {last_exc}")
 
 
+def _collect_dri_b_fred_ids(cfg: dict) -> list[str]:
+    """Return FRED series IDs needed for DRI-B components."""
+    return [
+        comp["series_id"]
+        for comp in cfg.get("dri_b_components", [])
+        if comp.get("source") == "fred" and comp.get("series_id")
+    ]
+
+
+def _make_dri_b_fred_map(cfg: dict) -> dict[str, str]:
+    """Map FRED series_id → dri_b component id for timeseries keying."""
+    return {
+        comp["series_id"]: comp["id"]
+        for comp in cfg.get("dri_b_components", [])
+        if comp.get("source") == "fred" and comp.get("series_id") and comp.get("id")
+    }
+
+
 def main() -> None:
     cfg = _load_config()
     components = cfg["dri_components"]
@@ -129,24 +147,10 @@ def main() -> None:
     }
     fred_ids.extend(mercury_fred_ids.keys())
 
-    def _collect_dri_b_fred_ids(cfg: dict) -> list:
-        """Return FRED series IDs needed for DRI-B components."""
-        dri_b_comps = cfg.get("dri_b_components", [])
-        return [
-            comp["series_id"]
-            for comp in dri_b_comps
-            if comp.get("source") == "fred" and comp.get("series_id")
-        ]
-
+    # DRI-B FRED components (PSAVERT, REVOLSL, LNS12026620, TDSP)
     dri_b_fred_ids = _collect_dri_b_fred_ids(cfg)
+    dri_b_fred_map = _make_dri_b_fred_map(cfg)
     fred_ids.extend(dri_b_fred_ids)
-
-    # Build lookup to remap dri_b FRED series IDs to component IDs
-    dri_b_fred_id_to_comp = {
-        comp["series_id"]: comp["id"]
-        for comp in cfg.get("dri_b_components", [])
-        if comp.get("source") == "fred" and comp.get("series_id")
-    }
 
     bls_ids = list(dict.fromkeys(bls_ids))
     fred_ids = list(dict.fromkeys(fred_ids))
@@ -202,8 +206,8 @@ def main() -> None:
             timeseries[fred_series_id_to_comp[sid]] = df  # e.g. cc_interest
         elif sid in mercury_fred_ids:
             timeseries[mercury_fred_ids[sid]] = df        # e.g. umich_expectations
-        elif sid in dri_b_fred_id_to_comp:
-            timeseries[dri_b_fred_id_to_comp[sid]] = df   # e.g. savings_rate, debt_service_ratio
+        elif sid in dri_b_fred_map:
+            timeseries[dri_b_fred_map[sid]] = df           # DRI-B FRED components
         else:
             timeseries[sid] = df
 
@@ -220,6 +224,9 @@ def main() -> None:
             timeseries[comp["id"]] = df
 
     # --- 3b. Load manual CSVs for Mercury components ---
+    # Filters by series_id column when present — supports multi-series CSVs
+    # (e.g. conference_board / conference_board_present_situation / conference_board_expectations
+    # all living in the same ccb.csv file, distinguished by the series_id column).
     mercury_manual = [c for c in mercury_comps if c["source"] == "manual" and c.get("id")]
     for comp in mercury_manual:
         path = Path(comp["manual_csv"])
@@ -230,21 +237,24 @@ def main() -> None:
         if "value" not in df.columns or "date" not in df.columns:
             print(f"  WARNING: {path} missing required columns [date, value] — skipping")
             continue
-        # Snap release-date timestamps to first-of-month so they align with
-        # FRED-sourced series (YYYY-MM-01 convention). Dedupe in case two
-        # releases fall in the same month; keep the later one.
-        df["date"] = df["date"].dt.to_period("M").dt.to_timestamp()
-        df = df.sort_values("date").drop_duplicates(subset=["date"], keep="last")
+        # Filter to this component's series if the CSV contains multiple series
+        if "series_id" in df.columns and comp["id"] in df["series_id"].values:
+            df = df[df["series_id"] == comp["id"]].copy()
         df["series_id"] = comp["id"]
         df["source"] = "manual"
         df["fetched_at"] = pd.Timestamp.utcnow()
         timeseries[comp["id"]] = df.sort_values("date").reset_index(drop=True)
+        print(f"  Loaded Mercury manual {comp['id']}: {len(df)} rows through {df['date'].max().strftime('%Y-%m')}")
 
     # --- 3c. Load manual CSVs for DRI-B components ---
+    # Same multi-series CSV support: abi_bankruptcies.csv contains four series
+    # (abi_bankruptcies_total, ch7, ch11, ch13), each filtered by series_id column.
     dri_b_manual = [
         c for c in cfg.get("dri_b_components", [])
         if c.get("source") == "manual" and c.get("id")
     ]
+    if dri_b_manual:
+        print(f"Loading {len(dri_b_manual)} DRI-B manual CSV series...")
     for comp in dri_b_manual:
         path = Path(comp["manual_csv"])
         if not path.exists():
@@ -254,8 +264,12 @@ def main() -> None:
         if "value" not in df.columns or "date" not in df.columns:
             print(f"  WARNING: {path} missing required columns [date, value] — skipping")
             continue
-        # Normalize to first-of-month (same fix as CCB)
-        df["date"] = df["date"].dt.to_period("M").dt.to_timestamp()
+        # Filter by series_id if the CSV contains multiple series
+        if "series_id" in df.columns and comp["id"] in df["series_id"].values:
+            df = df[df["series_id"] == comp["id"]].copy()
+        df = df.dropna(subset=["value"])
+        # Normalize to first-of-month (consistent with other manual series)
+        df["date"] = pd.to_datetime(df["date"]).dt.to_period("M").dt.to_timestamp()
         df = df.sort_values("date").drop_duplicates(subset=["date"], keep="last")
         df["series_id"] = comp["id"]
         df["source"] = "manual"
@@ -421,15 +435,12 @@ def main() -> None:
             dri_b_result = build_dri_b(dri_b_series)
             path = save_derived("dri_b_panel", dri_b_result.panel)
             print(f"  Wrote {path}")
-            ratio_str = (
-                f", Ch.7/Ch.13 ratio: {dri_b_result.ch7_ch13_ratio:.3f}"
-                if dri_b_result.ch7_ch13_ratio is not None else ""
-            )
             print(
-                f"  DRI-B stress signals: {dri_b_result.stress_count}/"
-                f"{dri_b_result.total_available} indicators "
-                f"({dri_b_result.stress_pct * 100:.0f}%){ratio_str}"
+                f"  DRI-B: {dri_b_result.stress_count}/{dri_b_result.total_available} indicators stress "
+                f"({dri_b_result.stress_pct * 100:.0f}%)"
             )
+            if dri_b_result.ch7_ch13_ratio is not None:
+                print(f"  Ch.7/Ch.13 ratio: {dri_b_result.ch7_ch13_ratio:.3f}")
     except Exception as exc:
         print(f"  WARNING: DRI-B build failed: {exc}")
 

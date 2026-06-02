@@ -421,10 +421,14 @@ def main() -> None:
             dri_b_result = build_dri_b(dri_b_series)
             path = save_derived("dri_b_panel", dri_b_result.panel)
             print(f"  Wrote {path}")
+            ratio_str = (
+                f", Ch.7/Ch.13 ratio: {dri_b_result.ch7_ch13_ratio:.3f}"
+                if dri_b_result.ch7_ch13_ratio is not None else ""
+            )
             print(
                 f"  DRI-B stress signals: {dri_b_result.stress_count}/"
                 f"{dri_b_result.total_available} indicators "
-                f"({dri_b_result.stress_pct * 100:.0f}%)"
+                f"({dri_b_result.stress_pct * 100:.0f}%){ratio_str}"
             )
     except Exception as exc:
         print(f"  WARNING: DRI-B build failed: {exc}")

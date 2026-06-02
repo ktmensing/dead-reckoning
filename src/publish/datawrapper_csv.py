@@ -289,11 +289,11 @@ def publish_dri_b(dri_b_panel: pd.DataFrame) -> None:
     """
     out = dri_b_panel[[
         "label", "latest_date", "latest_value", "unit",
-        "mom_pct", "yoy_pct", "direction", "note",
+        "period_pct", "yoy_pct", "direction", "note",
     ]].copy()
     out.columns = [
         "Indicator", "Data as of", "Latest", "Unit",
-        "MoM %", "YoY %", "Signal", "Note",
+        "Period %", "YoY %", "Signal", "Note",
     ]
     # Datawrapper table: replace None with em-dash for clean rendering
     out = out.fillna("—")

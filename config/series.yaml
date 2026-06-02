@@ -202,6 +202,27 @@ mercury_components:
       Conference Board Consumer Confidence headline. Manually populated from
       conference-board.org monthly press release (one number per month).
 
+  - id: conference_board_present_situation
+    source: manual
+    manual_csv: data/raw/manual/ccb.csv
+    cadence: monthly
+    stress_direction: down
+    notes: |
+      CB Present Situation Index. Reflects perceived current conditions.
+      Records preliminary value at release — never update to revised.
+      Starts May 2026; history builds forward.
+
+  - id: conference_board_expectations
+    source: manual
+    manual_csv: data/raw/manual/ccb.csv
+    cadence: monthly
+    stress_direction: down
+    notes: |
+      CB Expectations Index. Forward-looking 6-month outlook.
+      Records preliminary value at release — never update to revised.
+      Gap vs. Present Situation (Expectations - Present Situation) is a
+      leading sentiment turning-point signal. Starts May 2026.
+
   - id: oecd_confidence
     source: oecd
     series_id: USACSCICP02STSAM
@@ -325,21 +346,59 @@ dri_b_components:
       Releases: typically 2nd or 3rd Monday of the following month.
       CSV columns: date (YYYY-MM-01), value (mean probability %), series_id (nyf_sce_miss_prob)
 
-  - id: abi_bankruptcies
+  - id: abi_bankruptcies_total
     source: manual
-    series_id: abi_bankruptcies
-    manual_csv: data/raw/manual/abi_bankruptcies.csv
-    cadence: monthly
-    expected_lag_days: 30
-    hard_fail_days: 60
+    manual_csv: data/raw/manual/abi_bankruptcies_total.csv
+    cadence: quarterly
+    expected_lag_days: 45
+    hard_fail_days: 90
     carry_forward: false
     stress_direction: up
     notes: |
-      Monthly total consumer (non-business) bankruptcy filings.
-      American Bankruptcy Institute press release, releases ~3-4 weeks after month end.
-      Lagging but unambiguous — when this moves, the DRI has been right.
+      Quarterly nonbusiness (individual) bankruptcy filings, all chapters.
+      PRIMARY DRI-B stress signal — lagging but unambiguous.
+      Source: U.S. Courts F-2 tables at:
+      https://www.uscourts.gov/data-news/reports/statistical-reports/bankruptcy-filings-statistics
+      Download quarterly Excel files. Use the nonbusiness total column.
+      Backfill available Q1 2007–present.
 
-      Pull from: https://www.abi.org/newsroom/press-releases
-      Find the monthly filing statistics press release.
-      Use total consumer filings (Chapter 7 + Chapter 13 combined).
-      CSV columns: date (YYYY-MM-01, first of filing month), value (total filings), series_id (abi_bankruptcies)
+  - id: abi_bankruptcies_ch7
+    source: manual
+    manual_csv: data/raw/manual/abi_bankruptcies_ch7.csv
+    cadence: quarterly
+    expected_lag_days: 45
+    hard_fail_days: 90
+    carry_forward: false
+    stress_direction: up
+    notes: |
+      Quarterly Chapter 7 (liquidation) nonbusiness filings.
+      Texture indicator — rising Ch.7 vs. Ch.13 = capitulation phase.
+      Same source as abi_bankruptcies_total (U.S. Courts F-2).
+
+  - id: abi_bankruptcies_ch13
+    source: manual
+    manual_csv: data/raw/manual/abi_bankruptcies_ch13.csv
+    cadence: quarterly
+    expected_lag_days: 45
+    hard_fail_days: 90
+    carry_forward: false
+    stress_direction: up
+    notes: |
+      Quarterly Chapter 13 (reorganization) nonbusiness filings.
+      Texture indicator — tends to rise before Ch.7 in a stress cycle.
+      Same source as abi_bankruptcies_total (U.S. Courts F-2).
+
+  - id: abi_bankruptcies_ch11
+    source: manual
+    manual_csv: data/raw/manual/abi_bankruptcies_ch11.csv
+    cadence: quarterly
+    expected_lag_days: 45
+    hard_fail_days: 90
+    carry_forward: false
+    deferred: true
+    stress_direction: up
+    notes: |
+      Quarterly Chapter 11 (business reorganization) nonbusiness filings.
+      Upper-income K-shape marker — excluded from DRI-B panel but tracked here
+      for editorial reference. Use percentage-change trend for analysis.
+      Same source as abi_bankruptcies_total (U.S. Courts F-2).

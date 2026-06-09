@@ -1,7 +1,7 @@
 indicator_id,label,cadence,source,latest_date,latest_value,period_pct,yoy_pct,direction,unit,note
 savings_rate,Personal Savings Rate,monthly,FRED PSAVERT,2026-04-01,2.6,-18.75,-52.73,stress,%,Households drawing down savings buffer.
-revolving_credit,Revolving Credit Outstanding,monthly,FRED REVOLSL,2026-04-01,1348688.3,0.87,3.81,stress,$B,Credit card debt accumulation.
-multiple_job_holders,Multiple Job Holders,monthly,FRED LNS12026620,2026-05-01,5.2,0.0,-3.7,flat,thousands,Persons at work in 2+ jobs.
+revolving_credit,Revolving Credit Outstanding,monthly,FRED REVOLSL,2026-04-01,1348688.3,0.87,3.81,stress,$M,Credit card debt accumulation.
+multiple_job_holders,Multiple Jobholders (% of Employed),monthly,FRED LNS12026620,2026-05-01,5.2,0.0,-3.7,flat,%,Multiple jobholders as % of employed. Rising = workers supplementing income under financial pressure.
 debt_service_ratio,Household Debt Service Ratio,quarterly,FRED TDSP,2025-10-01,11.3231,0.58,1.8,stress,% of disposable income,Debt payments as share of disposable income.
 nyf_sce_miss_prob,Prob. of Missing Debt Payment,monthly,NY Fed SCE (manual),2026-05-01,12.6,10.82,-6.32,stress,%,Mean probability of missing minimum debt payment in next 3 months.
 abi_bankruptcies_total,Consumer Bankruptcy Filings,quarterly,U.S. Courts F-2 (manual),2026-03-01,145361.0,5.19,13.2,stress,filings/quarter,Nonbusiness all chapters. Primary DRI-B stress signal — lagging but unambiguous.

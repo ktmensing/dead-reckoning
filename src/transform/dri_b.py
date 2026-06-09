@@ -47,18 +47,18 @@ INDICATORS: dict[str, dict] = {
     "revolving_credit": {
         "label": "Revolving Credit Outstanding",
         "stress_direction": "up",     # rising credit card debt = stress
-        "unit": "$B",
+        "unit": "$M",
         "cadence": "monthly",
         "source": "FRED REVOLSL",
         "note": "Credit card debt accumulation.",
     },
     "multiple_job_holders": {
-        "label": "Multiple Job Holders",
+        "label": "Multiple Jobholders (% of Employed)",
         "stress_direction": "up",
-        "unit": "thousands",
+        "unit": "%",
         "cadence": "monthly",
         "source": "FRED LNS12026620",
-        "note": "Persons at work in 2+ jobs.",
+        "note": "Multiple jobholders as % of employed. Rising = workers supplementing income under financial pressure.",
     },
     "debt_service_ratio": {
         "label": "Household Debt Service Ratio",

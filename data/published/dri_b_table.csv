@@ -1,0 +1,9 @@
+Indicator,Cadence,Data as of,Latest,Unit,Period %,YoY %,Signal,Note
+Personal Savings Rate,monthly,2026-04-01,2.6,%,-18.75,-52.73,stress,Households drawing down savings buffer.
+Revolving Credit Outstanding,monthly,2026-04-01,1348688.3,$B,0.87,3.81,stress,Credit card debt accumulation.
+Multiple Job Holders,monthly,2026-05-01,5.2,thousands,0.0,-3.7,flat,Persons at work in 2+ jobs.
+Household Debt Service Ratio,quarterly,2025-10-01,11.3231,% of disposable income,0.58,1.8,stress,Debt payments as share of disposable income.
+Prob. of Missing Debt Payment,monthly,2026-05-01,12.6,%,10.82,-6.32,stress,Mean probability of missing minimum debt payment in next 3 months.
+Consumer Bankruptcy Filings,quarterly,—,—,filings/quarter,—,—,missing,Nonbusiness all chapters. Primary DRI-B stress signal — lagging but unambiguous.
+Chapter 7 Filings,quarterly,—,—,filings/quarter,—,—,missing,Liquidation filings. Rising Ch.7 vs. Ch.13 = capitulation phase.
+Chapter 13 Filings,quarterly,—,—,filings/quarter,—,—,missing,Reorganization filings. Tends to rise before Ch.7 in a stress cycle.

@@ -356,7 +356,7 @@ dri_b_components:
 
   - id: abi_bankruptcies_total
     source: manual
-    manual_csv: data/raw/manual/abi_bankruptcies_total.csv
+    manual_csv: data/raw/manual/abi_bankruptcies.csv
     cadence: quarterly
     expected_lag_days: 45
     hard_fail_days: 90
@@ -372,7 +372,7 @@ dri_b_components:
 
   - id: abi_bankruptcies_ch7
     source: manual
-    manual_csv: data/raw/manual/abi_bankruptcies_ch7.csv
+    manual_csv: data/raw/manual/abi_bankruptcies.csv
     cadence: quarterly
     expected_lag_days: 45
     hard_fail_days: 90
@@ -385,7 +385,7 @@ dri_b_components:
 
   - id: abi_bankruptcies_ch13
     source: manual
-    manual_csv: data/raw/manual/abi_bankruptcies_ch13.csv
+    manual_csv: data/raw/manual/abi_bankruptcies.csv
     cadence: quarterly
     expected_lag_days: 45
     hard_fail_days: 90
@@ -398,7 +398,7 @@ dri_b_components:
 
   - id: abi_bankruptcies_ch11
     source: manual
-    manual_csv: data/raw/manual/abi_bankruptcies_ch11.csv
+    manual_csv: data/raw/manual/abi_bankruptcies.csv
     cadence: quarterly
     expected_lag_days: 45
     hard_fail_days: 90

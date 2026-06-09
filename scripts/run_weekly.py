@@ -240,6 +240,11 @@ def main() -> None:
         # Filter to this component's series if the CSV contains multiple series
         if "series_id" in df.columns and comp["id"] in df["series_id"].values:
             df = df[df["series_id"] == comp["id"]].copy()
+        # Snap release-date timestamps to first-of-month so they align with
+        # FRED/OECD-sourced series (YYYY-MM-01 convention). Dedupe in case two
+        # releases fall in the same month; keep the later one.
+        df["date"] = pd.to_datetime(df["date"]).dt.to_period("M").dt.to_timestamp()
+        df = df.sort_values("date").drop_duplicates(subset=["date"], keep="last")
         df["series_id"] = comp["id"]
         df["source"] = "manual"
         df["fetched_at"] = pd.Timestamp.utcnow()

@@ -4,6 +4,6 @@ Revolving Credit Outstanding,monthly,2026-04-01,1348688.3,$B,0.87,3.81,stress,Cr
 Multiple Job Holders,monthly,2026-05-01,5.2,thousands,0.0,-3.7,flat,Persons at work in 2+ jobs.
 Household Debt Service Ratio,quarterly,2025-10-01,11.3231,% of disposable income,0.58,1.8,stress,Debt payments as share of disposable income.
 Prob. of Missing Debt Payment,monthly,2026-05-01,12.6,%,10.82,-6.32,stress,Mean probability of missing minimum debt payment in next 3 months.
-Consumer Bankruptcy Filings,quarterly,—,—,filings/quarter,—,—,missing,Nonbusiness all chapters. Primary DRI-B stress signal — lagging but unambiguous.
-Chapter 7 Filings,quarterly,—,—,filings/quarter,—,—,missing,Liquidation filings. Rising Ch.7 vs. Ch.13 = capitulation phase.
-Chapter 13 Filings,quarterly,—,—,filings/quarter,—,—,missing,Reorganization filings. Tends to rise before Ch.7 in a stress cycle.
+Consumer Bankruptcy Filings,quarterly,2026-03-01,145361.0,filings/quarter,5.19,13.2,stress,Nonbusiness all chapters. Primary DRI-B stress signal — lagging but unambiguous.
+Chapter 7 Filings,quarterly,2026-03-01,91674.0,filings/quarter,6.82,16.4,stress,Liquidation filings. Rising Ch.7 vs. Ch.13 = capitulation phase.
+Chapter 13 Filings,quarterly,2026-03-01,53543.0,filings/quarter,2.5,8.11,stress,Reorganization filings. Tends to rise before Ch.7 in a stress cycle.

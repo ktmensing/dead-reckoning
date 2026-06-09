@@ -204,24 +204,32 @@ mercury_components:
 
   - id: conference_board_present_situation
     source: manual
+    series_id: conference_board_present_situation
     manual_csv: data/raw/manual/ccb.csv
     cadence: monthly
-    stress_direction: down
+    expected_lag_days: 50
+    hard_fail_days: 100
+    carry_forward: true
+    weight: 0.0
     notes: |
       CB Present Situation Index. Reflects perceived current conditions.
       Records preliminary value at release — never update to revised.
-      Starts May 2026; history builds forward.
+      Starts May 2026; history builds forward. Included for sentiment texture.
 
   - id: conference_board_expectations
     source: manual
+    series_id: conference_board_expectations
     manual_csv: data/raw/manual/ccb.csv
     cadence: monthly
-    stress_direction: down
+    expected_lag_days: 50
+    hard_fail_days: 100
+    carry_forward: true
+    weight: 0.0
     notes: |
       CB Expectations Index. Forward-looking 6-month outlook.
       Records preliminary value at release — never update to revised.
       Gap vs. Present Situation (Expectations - Present Situation) is a
-      leading sentiment turning-point signal. Starts May 2026.
+      leading sentiment turning-point signal. Starts May 2026. Included for texture.
 
   - id: oecd_confidence
     source: oecd

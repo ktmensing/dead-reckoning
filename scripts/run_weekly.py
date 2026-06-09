@@ -387,11 +387,16 @@ def main() -> None:
     try:
         dri_series = panel.set_index("date")["dri"]
 
-        # Include all mercury_comps present in timeseries (fred, oecd, manual).
+        # Include only mercury_comps with non-zero weight. Texture components
+        # (weight=0.0, e.g. CB present_situation / expectations) are loaded for
+        # downstream charts but excluded from the composite — their short history
+        # would otherwise truncate the full Mercury series via NaN propagation
+        # (NaN * 0.0 = NaN, not 0).
         sentiment_sources = {
             comp["id"]: timeseries[comp["id"]].set_index("date")["value"]
             for comp in mercury_comps
             if comp.get("id") and comp["id"] in timeseries
+            and comp.get("weight", 0.0) > 0
         }
 
         if not sentiment_sources:
